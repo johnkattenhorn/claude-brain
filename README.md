@@ -4,6 +4,9 @@
     <strong>Sync your Claude Code brain across machines — portable, automatic, intelligent.</strong>
   </p>
   <p align="center">
+    <a href="docs/i18n/README.zh.md">🇨🇳 中文</a>
+  </p>
+  <p align="center">
     <b>claude-brain</b> is a Claude Code plugin for <b>brain sync</b> — sync Claude Code memory, skills, agents, rules, and settings across all your machines with semantic merge. Cross-machine, portable, zero daily effort.
   </p>
   <p align="center">
@@ -81,12 +84,9 @@ Two commands. Zero daily effort. Works forever.
 ### Install
 
 ```bash
-# From the Claude Code plugin marketplace (when available)
+# Add the marketplace and install
 /plugin marketplace add toroleapinc/claude-brain
 /plugin install claude-brain
-
-# Or local development
-claude --plugin-dir ./claude-brain
 ```
 
 ### Initialize (first machine)
