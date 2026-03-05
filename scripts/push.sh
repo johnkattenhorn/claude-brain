@@ -7,12 +7,14 @@ source "${SCRIPT_DIR}/common.sh"
 QUIET=false
 FORCE=false
 SKIP_SECRET_SCAN=false
+DRY_RUN=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --quiet) QUIET=true; BRAIN_QUIET=true; shift ;;
     --force) FORCE=true; shift ;;
     --skip-secret-scan) SKIP_SECRET_SCAN=true; shift ;;
+    --dry-run) DRY_RUN=true; shift ;;
     *) shift ;;
   esac
 done
@@ -31,11 +33,18 @@ $SKIP_SECRET_SCAN && export_args+=(--skip-secret-scan)
 "${SCRIPT_DIR}/export.sh" "${export_args[@]}"
 
 # Check if anything actually changed
-if ! $FORCE; then
+if ! $FORCE && ! $DRY_RUN; then
   if brain_git diff --quiet -- "machines/${machine_id}/" 2>/dev/null; then
     log_info "No changes to push."
     exit 0
   fi
+fi
+
+# Dry-run mode: show what would be synced
+if $DRY_RUN; then
+  log_info "Would sync:"
+  brain_git diff --stat -- "machines/${machine_id}/" 2>/dev/null || true
+  exit 0
 fi
 
 # Update machines.json with last sync time

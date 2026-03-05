@@ -6,11 +6,13 @@ source "${SCRIPT_DIR}/common.sh"
 
 QUIET=false
 AUTO_MERGE=false
+DRY_RUN=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --quiet) QUIET=true; BRAIN_QUIET=true; shift ;;
     --auto-merge) AUTO_MERGE=true; shift ;;
+    --dry-run) DRY_RUN=true; shift ;;
     *) shift ;;
   esac
 done
