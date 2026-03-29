@@ -261,15 +261,20 @@ def get_machine_snapshot(machine_id: str = "") -> str:
 
     snap = read_json(snap_file)
     # Return a summary, not the full snapshot (which can be huge)
+    # Use (x or {}) pattern to handle None values in nested fields
+    declarative = snap.get("declarative") or {}
+    procedural = snap.get("procedural") or {}
+    experiential = snap.get("experiential") or {}
+    claude_md = declarative.get("claude_md") or {}
     summary = {
-        "machine": snap.get("machine", {}),
+        "machine": snap.get("machine") or {},
         "exported_at": snap.get("exported_at"),
         "schema_version": snap.get("schema_version"),
-        "memory_projects": list(snap.get("experiential", {}).get("auto_memory", {}).keys()),
-        "skills": list(snap.get("procedural", {}).get("skills", {}).keys()),
-        "agents": list(snap.get("procedural", {}).get("agents", {}).keys()),
-        "rules": list(snap.get("declarative", {}).get("rules", {}).keys()),
-        "has_claude_md": bool(snap.get("declarative", {}).get("claude_md", {}).get("content")),
+        "memory_projects": list((experiential.get("auto_memory") or {}).keys()),
+        "skills": list((procedural.get("skills") or {}).keys()),
+        "agents": list((procedural.get("agents") or {}).keys()),
+        "rules": list((declarative.get("rules") or {}).keys()),
+        "has_claude_md": bool(claude_md.get("content")),
     }
     return json.dumps(summary, indent=2)
 
