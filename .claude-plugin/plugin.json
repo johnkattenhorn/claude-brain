@@ -1,13 +1,28 @@
 {
   "name": "claude-brain-sync",
   "description": "Sync and evolve your Claude Code brain across machines. Automatically exports, merges, and applies your accumulated knowledge (memory, skills, agents, rules, settings) across all your development machines via Git.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
-    "name": "edvatar",
-    "url": "https://github.com/toroleapinc"
+    "name": "johnkattenhorn",
+    "url": "https://github.com/johnkattenhorn"
   },
-  "homepage": "https://github.com/toroleapinc/claude-brain",
-  "repository": "https://github.com/toroleapinc/claude-brain",
+  "homepage": "https://github.com/johnkattenhorn/claude-brain",
+  "repository": "https://github.com/johnkattenhorn/claude-brain",
   "license": "MIT",
-  "keywords": ["sync", "memory", "brain", "multi-machine", "merge", "productivity", "dotfiles", "cross-device"]
+  "keywords": ["sync", "memory", "brain", "multi-machine", "merge", "productivity", "dotfiles", "cross-device"],
+  "skills": [
+    "./skills/brain-init",
+    "./skills/brain-join",
+    "./skills/brain-sync",
+    "./skills/brain-status",
+    "./skills/brain-evolve",
+    "./skills/brain-conflicts",
+    "./skills/brain-share",
+    "./skills/brain-shared-list",
+    "./skills/brain-log"
+  ],
+  "agents": [
+    "./agents/brain-merge.md"
+  ],
+  "hooks": "./hooks/hooks.json"
 }
