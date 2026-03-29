@@ -168,6 +168,28 @@ Control what syncs per-machine. Built-in profiles:
 | **Env vars** | **Never** | Machine-specific |
 | **API keys** | **Never** | Stripped automatically |
 
+## Plugin Sync
+
+Claude Code plugins and marketplaces cannot be synced programmatically — they require interactive `claude plugin` commands. To solve this, brain-sync auto-generates a `PLUGINS.md` file in your brain data repo listing all installed plugins and marketplaces as runnable commands.
+
+**How it works:**
+
+A `scripts/sync-plugins-list.sh` script in your brain data repo reads `~/.claude/plugins/installed_plugins.json` and `~/.claude/plugins/known_marketplaces.json`, generates `PLUGINS.md` with the exact `claude plugin marketplace add` and `claude plugin install` commands, and auto-commits/pushes if anything changed.
+
+**On a new machine after `/brain-join`:**
+
+1. Open `PLUGINS.md` in your brain data repo (or run `cat ~/.claude/brain-repo/PLUGINS.md`)
+2. Run the marketplace commands first, then the plugin install commands
+3. Restart Claude Code
+
+**Auto-updating:** Add a hook or alias to run `sync-plugins-list.sh` at session start so `PLUGINS.md` stays current as you add/remove plugins. Example hook in your brain data repo's `scripts/` directory:
+
+```bash
+bash ~/path-to-brain-repo/scripts/sync-plugins-list.sh
+```
+
+> **Note:** Plugins are intentionally not auto-installed — this is a safety measure since plugins execute code and each machine may need different plugins.
+
 ## Architecture
 
 ```
