@@ -3,29 +3,37 @@ services:
     build: .
     container_name: brain-mcp
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "8080:8080"
+      - "3008:3008"   # MCP SSE
+      - "3009:3009"   # Health endpoint
     volumes:
-      # Mount the brain git repo (read-only for safety)
-      - ~/.claude/brain-repo:/data/brain-repo:ro
-      # Mount claude config dir (read-only except for CLAUDE.md write-back)
-      - ~/.claude:/data/claude
-      # Mount the plugin scripts (for trigger_sync tool)
+      # Mount brain git repo
+      - brain-repo:/data/brain-repo
+      # Mount claude config dir
+      - claude-config:/data/claude
+      # Mount plugin scripts for trigger_sync tool
       - ../:/app/plugin:ro
     environment:
+      - TZ=Europe/London
+      - MCP_PORT=3008
       - BRAIN_REPO=/data/brain-repo
       - CLAUDE_DIR=/data/claude
       - CLAUDE_PLUGIN_ROOT=/app/plugin
-    labels:
-      # Traefik integration (adjust domain to your setup)
-      - "traefik.enable=true"
-      - "traefik.http.routers.brain-mcp.rule=Host(`brain.khn.family`)"
-      - "traefik.http.routers.brain-mcp.entrypoints=websecure"
-      - "traefik.http.routers.brain-mcp.tls.certresolver=letsencrypt"
-      - "traefik.http.services.brain-mcp.loadbalancer.server.port=8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:3009/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
     networks:
-      - traefik
+      - proxy
+
+volumes:
+  brain-repo:
+  claude-config:
 
 networks:
-  traefik:
+  proxy:
     external: true

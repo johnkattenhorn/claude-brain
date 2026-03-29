@@ -24,10 +24,7 @@ BRAIN_REPO = Path(os.environ.get("BRAIN_REPO", Path.home() / ".claude" / "brain-
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_DIR", Path.home() / ".claude"))
 BRAIN_CONFIG = CLAUDE_DIR / "brain-config.json"
 
-mcp = FastMCP(
-    "brain-sync",
-    description="Access and manage Claude Code brain data — memory, rules, skills, and sync status",
-)
+mcp = FastMCP("brain-sync")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -306,16 +303,54 @@ def get_brain_diff() -> str:
     return json.dumps({"push_diff": push_diff, "pull_diff": pull_diff}, indent=2)
 
 
+# ── Health Check Server ──────────────────────────────────────────────────────
+
+def run_with_health(mcp_server, host: str, port: int):
+    """Run MCP SSE server with a /health endpoint for Traefik."""
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    health_port = port + 1  # Health on port+1 (e.g., 3009 if MCP on 3008)
+
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/health":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                status = {
+                    "status": "ok",
+                    "service": "brain-mcp",
+                    "brain_repo_exists": BRAIN_REPO.is_dir(),
+                    "config_exists": BRAIN_CONFIG.is_file(),
+                }
+                self.wfile.write(json.dumps(status).encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            pass  # Suppress access logs
+
+    health_server = HTTPServer((host, health_port), HealthHandler)
+    health_thread = threading.Thread(target=health_server.serve_forever, daemon=True)
+    health_thread.start()
+    print(f"Health endpoint on http://{host}:{health_port}/health", file=sys.stderr)
+
+    # Run MCP server on main thread
+    mcp_server.run(transport="sse", host=host, port=port)
+
+
 # ── Entry Point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     if "--http" in sys.argv:
         # Remote HTTP/SSE mode
-        port = 8080
+        port = int(os.environ.get("MCP_PORT", "3008"))
         for i, arg in enumerate(sys.argv):
             if arg == "--port" and i + 1 < len(sys.argv):
                 port = int(sys.argv[i + 1])
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        run_with_health(mcp, host="0.0.0.0", port=port)
     else:
         # Local stdio mode (default)
         mcp.run()
