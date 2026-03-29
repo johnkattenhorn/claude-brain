@@ -125,6 +125,7 @@ if [ -f "$DEFAULTS_FILE" ]; then
 fi
 
 RESULT=$(claude -p "$PROMPT" \
+  --bare \
   --output-format json \
   --json-schema "$SCHEMA" \
   --model "$MERGE_MODEL" \

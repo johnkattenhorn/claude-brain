@@ -123,12 +123,16 @@ else
       "${BRAIN_REPO}/consolidated/brain.json.merging"
   done
 
-  # Now run N-way semantic merge on all snapshots at once
-  "${SCRIPT_DIR}/merge-semantic.sh" \
-    "${BRAIN_REPO}/consolidated/brain.json" \
-    "${snapshots[@]}" || {
-    log_warn "Semantic merge failed. Using structured merge only."
-  }
+  # Semantic merge: only run on manual sync (not in quiet/hook mode — too slow)
+  if ! $QUIET; then
+    "${SCRIPT_DIR}/merge-semantic.sh" \
+      "${BRAIN_REPO}/consolidated/brain.json" \
+      "${snapshots[@]}" || {
+      log_warn "Semantic merge failed. Using structured merge only."
+    }
+  else
+    log_info "Skipping semantic merge (quiet mode). Run /brain-sync for full merge."
+  fi
   
   # Use the structurally merged version if semantic merge failed
   if [ -f "${BRAIN_REPO}/consolidated/brain.json.merging" ]; then

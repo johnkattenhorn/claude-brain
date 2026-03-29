@@ -155,6 +155,7 @@ SCHEMA='{
 log_info "Running semantic merge via claude..."
 
 RESULT=$(claude -p "$(cat "$PROMPT_FILE")" \
+  --bare \
   --output-format json \
   --json-schema "$SCHEMA" \
   --model "$MERGE_MODEL" \
