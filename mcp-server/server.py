@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Brain Sync MCP Server — Exposes brain data to Claude Desktop and Claude Web.
 
-Reads from the brain git repo and provides resources (read) and tools (write-back).
-Deploy locally (stdio) or remotely (HTTP/SSE) behind Traefik.
+Reads from the brain git repo (consolidated brain + machine snapshots).
+Works both locally (with live ~/.claude access) and remotely (repo-only mode).
 
 Usage:
   Local:   python server.py                    (stdio, for Claude Desktop)
@@ -23,6 +23,7 @@ from fastmcp import FastMCP
 BRAIN_REPO = Path(os.environ.get("BRAIN_REPO", Path.home() / ".claude" / "brain-repo"))
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_DIR", Path.home() / ".claude"))
 BRAIN_CONFIG = CLAUDE_DIR / "brain-config.json"
+CONSOLIDATED = BRAIN_REPO / "consolidated" / "brain.json"
 
 mcp = FastMCP("brain-sync")
 
@@ -45,14 +46,20 @@ def read_text(path: Path) -> str:
         return ""
 
 
-def scan_markdown_dir(directory: Path) -> dict[str, str]:
-    """Scan a directory for .md files, return {filename: content}."""
-    result = {}
-    if directory.is_dir():
-        for f in sorted(directory.rglob("*.md")):
-            key = str(f.relative_to(directory))
-            result[key] = f.read_text()
-    return result
+def get_brain() -> dict:
+    """Load the consolidated brain JSON. This is the primary data source."""
+    return read_json(CONSOLIDATED)
+
+
+def git_pull_repo():
+    """Pull latest changes from the brain repo."""
+    try:
+        subprocess.run(
+            ["git", "-C", str(BRAIN_REPO), "pull", "origin", "main"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
 
 
 # ── Resources (read-only brain data) ────────────────────────────────────────
@@ -60,90 +67,100 @@ def scan_markdown_dir(directory: Path) -> dict[str, str]:
 @mcp.resource("brain://claude-md")
 def get_claude_md() -> str:
     """Current CLAUDE.md content — your global instructions for Claude."""
-    content = read_text(CLAUDE_DIR / "CLAUDE.md")
-    return content if content else "No CLAUDE.md found."
+    brain = get_brain()
+    content = brain.get("declarative", {}).get("claude_md", {}).get("content", "")
+    return content if content else "No CLAUDE.md found in consolidated brain."
 
 
 @mcp.resource("brain://status")
 def get_status() -> str:
-    """Brain sync status: last sync times, dirty flag, machine info."""
-    config = read_json(BRAIN_CONFIG)
+    """Brain sync status: machines, last export times, snapshot info."""
     machines = read_json(BRAIN_REPO / "meta" / "machines.json")
+    brain = get_brain()
 
-    # Count conflicts
-    conflicts_file = CLAUDE_DIR / "brain-conflicts.json"
-    conflicts = read_json(conflicts_file)
-    conflict_count = len(conflicts.get("conflicts", []))
+    # Collect per-machine status from snapshots
+    machine_statuses = []
+    machines_dir = BRAIN_REPO / "machines"
+    if machines_dir.is_dir():
+        for snap_dir in sorted(machines_dir.iterdir()):
+            snap_file = snap_dir / "brain-snapshot.json"
+            if snap_file.exists():
+                snap = read_json(snap_file)
+                machine_statuses.append({
+                    "id": snap.get("machine", {}).get("id", snap_dir.name),
+                    "name": snap.get("machine", {}).get("name", "unknown"),
+                    "os": snap.get("machine", {}).get("os", "unknown"),
+                    "exported_at": snap.get("exported_at", "unknown"),
+                })
 
     status = {
-        "machine_id": config.get("machine_id", "unknown"),
-        "machine_name": config.get("machine_name", "unknown"),
-        "last_push": config.get("last_push", "never"),
-        "last_pull": config.get("last_pull", "never"),
-        "dirty": config.get("dirty", False),
-        "active_profile": config.get("active_profile", "full"),
-        "conflict_count": conflict_count,
         "machines_in_network": len(machines.get("machines", [])),
-        "remote": config.get("remote", "not configured"),
+        "machine_snapshots": machine_statuses,
+        "consolidated_brain_exists": CONSOLIDATED.is_file(),
+        "brain_schema": brain.get("schema_version", "unknown"),
     }
     return json.dumps(status, indent=2)
 
 
 @mcp.resource("brain://memory")
 def get_memory_index() -> str:
-    """Index of all memory entries across projects."""
-    projects_dir = CLAUDE_DIR / "projects"
+    """Index of all memory entries across projects (from consolidated brain)."""
+    brain = get_brain()
+    auto_memory = brain.get("experiential", {}).get("auto_memory", {})
+
     index = {}
+    for project, entries in auto_memory.items():
+        if isinstance(entries, dict):
+            index[project] = list(entries.keys())
 
-    if projects_dir.is_dir():
-        for proj_dir in sorted(projects_dir.iterdir()):
-            if not proj_dir.is_dir():
-                continue
-            mem_dir = proj_dir / "memory"
-            if mem_dir.is_dir():
-                entries = scan_markdown_dir(mem_dir)
-                if entries:
-                    # Decode project name from encoded path
-                    encoded = proj_dir.name
-                    project_name = encoded.replace("--", "\x00").lstrip("-").replace("-", "/").replace("\x00", "-")
-                    project_name = Path(project_name).name
-                    index[project_name] = list(entries.keys())
-
-    return json.dumps(index, indent=2)
+    return json.dumps(index, indent=2) if index else "No memory entries in consolidated brain."
 
 
 @mcp.resource("brain://memory/{project}/{entry}")
 def get_memory_entry(project: str, entry: str) -> str:
     """Read a specific memory entry by project and filename."""
-    projects_dir = CLAUDE_DIR / "projects"
-    if not projects_dir.is_dir():
-        return "No projects directory found."
+    brain = get_brain()
+    auto_memory = brain.get("experiential", {}).get("auto_memory", {})
 
-    for proj_dir in projects_dir.iterdir():
-        if not proj_dir.is_dir():
-            continue
-        decoded = proj_dir.name.replace("--", "\x00").lstrip("-").replace("-", "/").replace("\x00", "-")
-        if Path(decoded).name == project:
-            mem_file = proj_dir / "memory" / entry
-            if mem_file.exists():
-                return mem_file.read_text()
-            return f"Memory entry '{entry}' not found in project '{project}'."
+    proj_entries = auto_memory.get(project, {})
+    if not proj_entries:
+        return f"Project '{project}' not found. Available: {list(auto_memory.keys())}"
 
-    return f"Project '{project}' not found."
+    entry_data = proj_entries.get(entry, {})
+    if not entry_data:
+        return f"Entry '{entry}' not found in '{project}'. Available: {list(proj_entries.keys())}"
+
+    return entry_data.get("content", "No content.")
 
 
 @mcp.resource("brain://rules")
 def get_rules() -> str:
-    """All rules from ~/.claude/rules/."""
-    rules = scan_markdown_dir(CLAUDE_DIR / "rules")
-    return json.dumps(rules, indent=2) if rules else "No rules found."
+    """All rules from the consolidated brain."""
+    brain = get_brain()
+    rules = brain.get("declarative", {}).get("rules", {})
+    if not rules:
+        return "No rules found."
+    # Return rule names and content
+    result = {}
+    for name, data in rules.items():
+        result[name] = data.get("content", "") if isinstance(data, dict) else str(data)
+    return json.dumps(result, indent=2)
 
 
 @mcp.resource("brain://skills")
 def get_skills() -> str:
-    """All user skills from ~/.claude/skills/."""
-    skills = scan_markdown_dir(CLAUDE_DIR / "skills")
+    """All user skills from the consolidated brain."""
+    brain = get_brain()
+    skills = brain.get("procedural", {}).get("skills", {})
     return json.dumps(list(skills.keys()), indent=2) if skills else "No skills found."
+
+
+@mcp.resource("brain://agents")
+def get_agents() -> str:
+    """All agents from the consolidated brain."""
+    brain = get_brain()
+    agents = brain.get("procedural", {}).get("agents", {})
+    return json.dumps(list(agents.keys()), indent=2) if agents else "No agents found."
 
 
 @mcp.resource("brain://machines")
@@ -158,49 +175,29 @@ def get_sync_log() -> str:
     """Recent sync history (last 20 entries)."""
     log = read_json(BRAIN_REPO / "meta" / "merge-log.json")
     entries = log.get("entries", [])[:20]
-    return json.dumps(entries, indent=2)
-
-
-@mcp.resource("brain://conflicts")
-def get_conflicts() -> str:
-    """Unresolved merge conflicts."""
-    conflicts = read_json(CLAUDE_DIR / "brain-conflicts.json")
-    items = conflicts.get("conflicts", [])
-    if not items:
-        return "No unresolved conflicts."
-    return json.dumps(items, indent=2)
+    return json.dumps(entries, indent=2) if entries else "No sync history yet."
 
 
 # ── Tools (actions) ─────────────────────────────────────────────────────────
 
 @mcp.tool()
 def search_memory(query: str, limit: int = 10) -> str:
-    """Search all memory entries for a keyword or phrase."""
+    """Search all memory entries across projects for a keyword or phrase."""
+    brain = get_brain()
+    auto_memory = brain.get("experiential", {}).get("auto_memory", {})
     results = []
-    projects_dir = CLAUDE_DIR / "projects"
 
-    if not projects_dir.is_dir():
-        return json.dumps({"results": [], "message": "No projects directory found."})
-
-    for proj_dir in projects_dir.iterdir():
-        if not proj_dir.is_dir():
+    for project, entries in auto_memory.items():
+        if not isinstance(entries, dict):
             continue
-        mem_dir = proj_dir / "memory"
-        if not mem_dir.is_dir():
-            continue
-
-        decoded = proj_dir.name.replace("--", "\x00").lstrip("-").replace("-", "/").replace("\x00", "-")
-        project_name = Path(decoded).name
-
-        for mem_file in mem_dir.rglob("*.md"):
-            content = mem_file.read_text()
+        for entry_name, entry_data in entries.items():
+            content = entry_data.get("content", "") if isinstance(entry_data, dict) else ""
             if query.lower() in content.lower():
-                # Extract matching context
                 lines = content.split("\n")
                 matching_lines = [l.strip() for l in lines if query.lower() in l.lower()]
                 results.append({
-                    "project": project_name,
-                    "file": mem_file.name,
+                    "project": project,
+                    "file": entry_name,
                     "matches": matching_lines[:3],
                 })
                 if len(results) >= limit:
@@ -212,95 +209,60 @@ def search_memory(query: str, limit: int = 10) -> str:
 
 
 @mcp.tool()
-def trigger_sync() -> str:
-    """Trigger a brain push+pull sync cycle."""
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-
-    if not plugin_root:
-        # Try to find plugin
-        for candidate in [
-            CLAUDE_DIR / "plugins" / "cache" / "claude-brain-sync",
-            CLAUDE_DIR / "plugins" / "claude-brain",
-        ]:
-            if candidate.is_dir():
-                # Find the scripts dir
-                for scripts_dir in candidate.rglob("scripts/push.sh"):
-                    plugin_root = str(scripts_dir.parent.parent)
-                    break
-            if plugin_root:
-                break
-
-    if not plugin_root:
-        return json.dumps({"error": "Could not find brain plugin. Set CLAUDE_PLUGIN_ROOT."})
-
-    results = {}
-
-    # Push
+def refresh_brain() -> str:
+    """Pull latest brain data from the git remote. Call this to get fresh data."""
     try:
-        push_result = subprocess.run(
-            ["bash", f"{plugin_root}/scripts/push.sh", "--quiet", "--skip-secret-scan"],
-            capture_output=True, text=True, timeout=30,
+        result = subprocess.run(
+            ["git", "-C", str(BRAIN_REPO), "pull", "origin", "main"],
+            capture_output=True, text=True, timeout=15,
         )
-        results["push"] = {"status": "ok" if push_result.returncode == 0 else "error",
-                           "output": push_result.stderr.strip()}
+        output = result.stdout.strip()
+        if "Already up to date" in output or "Already up-to-date" in output:
+            return json.dumps({"status": "ok", "message": "Already up to date."})
+        return json.dumps({"status": "ok", "message": f"Updated: {output}"})
     except subprocess.TimeoutExpired:
-        results["push"] = {"status": "timeout"}
-
-    # Pull
-    try:
-        pull_result = subprocess.run(
-            ["bash", f"{plugin_root}/scripts/pull.sh", "--quiet", "--auto-merge"],
-            capture_output=True, text=True, timeout=30,
-        )
-        results["pull"] = {"status": "ok" if pull_result.returncode == 0 else "error",
-                           "output": pull_result.stderr.strip()}
-    except subprocess.TimeoutExpired:
-        results["pull"] = {"status": "timeout"}
-
-    return json.dumps(results, indent=2)
+        return json.dumps({"status": "error", "message": "Git pull timed out."})
+    except FileNotFoundError:
+        return json.dumps({"status": "error", "message": "Git not found."})
 
 
 @mcp.tool()
-def update_claude_md(content: str) -> str:
-    """Replace CLAUDE.md content entirely. Use with care."""
-    path = CLAUDE_DIR / "CLAUDE.md"
+def get_machine_snapshot(machine_id: str = "") -> str:
+    """Get a specific machine's brain snapshot. Leave empty to list available machines."""
+    machines_dir = BRAIN_REPO / "machines"
+    if not machines_dir.is_dir():
+        return json.dumps({"error": "No machines directory found."})
 
-    # Backup current
-    if path.exists():
-        backup = CLAUDE_DIR / "CLAUDE.md.bak"
-        backup.write_text(path.read_text())
+    if not machine_id:
+        # List available machines
+        available = []
+        for d in sorted(machines_dir.iterdir()):
+            if d.is_dir() and (d / "brain-snapshot.json").exists():
+                snap = read_json(d / "brain-snapshot.json")
+                available.append({
+                    "id": d.name,
+                    "name": snap.get("machine", {}).get("name", "unknown"),
+                    "exported_at": snap.get("exported_at", "unknown"),
+                })
+        return json.dumps({"machines": available}, indent=2)
 
-    path.write_text(content)
-    return json.dumps({"status": "ok", "message": "CLAUDE.md updated. Run sync to propagate."})
+    snap_file = machines_dir / machine_id / "brain-snapshot.json"
+    if not snap_file.exists():
+        return json.dumps({"error": f"No snapshot for machine '{machine_id}'."})
 
-
-@mcp.tool()
-def get_brain_diff() -> str:
-    """Show what would change on next sync (like /brain-diff)."""
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-
-    if not plugin_root:
-        return json.dumps({"error": "CLAUDE_PLUGIN_ROOT not set."})
-
-    try:
-        result = subprocess.run(
-            ["bash", f"{plugin_root}/scripts/push.sh", "--dry-run"],
-            capture_output=True, text=True, timeout=15,
-        )
-        push_diff = result.stderr.strip() + "\n" + result.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        push_diff = "Could not compute push diff."
-
-    try:
-        result = subprocess.run(
-            ["bash", f"{plugin_root}/scripts/pull.sh", "--dry-run"],
-            capture_output=True, text=True, timeout=15,
-        )
-        pull_diff = result.stderr.strip() + "\n" + result.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pull_diff = "Could not compute pull diff."
-
-    return json.dumps({"push_diff": push_diff, "pull_diff": pull_diff}, indent=2)
+    snap = read_json(snap_file)
+    # Return a summary, not the full snapshot (which can be huge)
+    summary = {
+        "machine": snap.get("machine", {}),
+        "exported_at": snap.get("exported_at"),
+        "schema_version": snap.get("schema_version"),
+        "memory_projects": list(snap.get("experiential", {}).get("auto_memory", {}).keys()),
+        "skills": list(snap.get("procedural", {}).get("skills", {}).keys()),
+        "agents": list(snap.get("procedural", {}).get("agents", {}).keys()),
+        "rules": list(snap.get("declarative", {}).get("rules", {}).keys()),
+        "has_claude_md": bool(snap.get("declarative", {}).get("claude_md", {}).get("content")),
+    }
+    return json.dumps(summary, indent=2)
 
 
 # ── Health Check Server ──────────────────────────────────────────────────────
@@ -310,7 +272,7 @@ def run_with_health(mcp_server, host: str, port: int):
     import threading
     from http.server import HTTPServer, BaseHTTPRequestHandler
 
-    health_port = port + 1  # Health on port+1 (e.g., 3009 if MCP on 3008)
+    health_port = port + 1
 
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -322,7 +284,7 @@ def run_with_health(mcp_server, host: str, port: int):
                     "status": "ok",
                     "service": "brain-mcp",
                     "brain_repo_exists": BRAIN_REPO.is_dir(),
-                    "config_exists": BRAIN_CONFIG.is_file(),
+                    "consolidated_exists": CONSOLIDATED.is_file(),
                 }
                 self.wfile.write(json.dumps(status).encode())
             else:
@@ -330,14 +292,13 @@ def run_with_health(mcp_server, host: str, port: int):
                 self.end_headers()
 
         def log_message(self, format, *args):
-            pass  # Suppress access logs
+            pass
 
     health_server = HTTPServer((host, health_port), HealthHandler)
     health_thread = threading.Thread(target=health_server.serve_forever, daemon=True)
     health_thread.start()
     print(f"Health endpoint on http://{host}:{health_port}/health", file=sys.stderr)
 
-    # Run MCP server on main thread
     mcp_server.run(transport="sse", host=host, port=port)
 
 
@@ -345,12 +306,10 @@ def run_with_health(mcp_server, host: str, port: int):
 
 if __name__ == "__main__":
     if "--http" in sys.argv:
-        # Remote HTTP/SSE mode
         port = int(os.environ.get("MCP_PORT", "3008"))
         for i, arg in enumerate(sys.argv):
             if arg == "--port" and i + 1 < len(sys.argv):
                 port = int(sys.argv[i + 1])
         run_with_health(mcp, host="0.0.0.0", port=port)
     else:
-        # Local stdio mode (default)
         mcp.run()
