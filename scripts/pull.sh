@@ -34,6 +34,25 @@ brain_git fetch origin main 2>/dev/null || {
   log_warn "Could not fetch from remote. Working offline."
   exit 0
 }
+
+# Dry-run mode: show what would change without applying
+if $DRY_RUN; then
+  log_info "Dry run — showing what would change:"
+  echo ""
+  echo "=== Remote changes ==="
+  brain_git diff HEAD..origin/main --stat 2>/dev/null || echo "  (none)"
+  echo ""
+  echo "=== Local changes (would be pushed) ==="
+  machine_id_val=$(get_config "machine_id")
+  brain_git diff --stat -- "machines/${machine_id_val}/" 2>/dev/null || echo "  (none)"
+  echo ""
+  echo "=== Machines with snapshots ==="
+  for snap in "${BRAIN_REPO}"/machines/*/brain-snapshot.json; do
+    [ -f "$snap" ] && echo "  $(basename "$(dirname "$snap")")"
+  done
+  exit 0
+fi
+
 brain_git merge origin/main --no-edit 2>/dev/null || {
   # If merge conflicts in git, try rebase
   brain_git rebase origin/main 2>/dev/null || {

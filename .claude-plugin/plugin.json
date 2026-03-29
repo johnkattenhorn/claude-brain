@@ -1,7 +1,7 @@
 {
   "name": "claude-brain-sync",
   "description": "Sync and evolve your Claude Code brain across machines. Automatically exports, merges, and applies your accumulated knowledge (memory, skills, agents, rules, settings) across all your development machines via Git.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "johnkattenhorn",
     "url": "https://github.com/johnkattenhorn"
@@ -19,7 +19,9 @@
     "./skills/brain-conflicts",
     "./skills/brain-share",
     "./skills/brain-shared-list",
-    "./skills/brain-log"
+    "./skills/brain-log",
+    "./skills/brain-diff",
+    "./skills/brain-doctor"
   ],
   "agents": [
     "./agents/brain-merge.md"
