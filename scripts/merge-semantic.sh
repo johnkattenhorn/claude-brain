@@ -13,11 +13,13 @@ SNAPSHOTS=("$@")
 
 CONFIDENCE_THRESHOLD=0.8
 MAX_BUDGET="0.50"
+MERGE_MODEL="sonnet"
 
 # Load defaults
 if [ -f "$DEFAULTS_FILE" ]; then
   CONFIDENCE_THRESHOLD=$(jq -r '.merge_confidence_threshold // 0.8' "$DEFAULTS_FILE")
   MAX_BUDGET=$(jq -r '.max_budget_usd // 0.50' "$DEFAULTS_FILE")
+  MERGE_MODEL=$(jq -r '.merge_model // "sonnet"' "$DEFAULTS_FILE")
 fi
 
 if ! command -v claude &>/dev/null; then
@@ -155,7 +157,7 @@ log_info "Running semantic merge via claude..."
 RESULT=$(claude -p "$(cat "$PROMPT_FILE")" \
   --output-format json \
   --json-schema "$SCHEMA" \
-  --model sonnet \
+  --model "$MERGE_MODEL" \
   --max-turns 1 \
   --max-budget-usd "$MAX_BUDGET" \
   2>/dev/null) || {
@@ -180,10 +182,21 @@ ${claude_md_content}"
     fi
   done
   
-  # Update output with concatenated content
+  # Update output with concatenated CLAUDE.md
   tmp=$(brain_mktemp)
   jq --arg content "$fallback_claude_md" \
     '.declarative.claude_md.content = $content' "$OUTPUT" > "$tmp" && mv "$tmp" "$OUTPUT"
+
+  # Also merge memory from other snapshots (union by project+key, don't overwrite existing)
+  for snapshot_file in "${SNAPSHOTS[@]:1}"; do
+    local_tmp=$(brain_mktemp)
+    jq -s '.[0] as $base | .[1] as $other |
+      $base | .experiential.auto_memory = (
+        ($other.experiential.auto_memory // {}) * ($base.experiential.auto_memory // {})
+      )' "$OUTPUT" "$snapshot_file" > "$local_tmp" && mv "$local_tmp" "$OUTPUT"
+  done
+
+  log_warn "Fallback merge used concatenation — run /brain-sync again when claude CLI is available for semantic merge."
   exit 0
 }
 

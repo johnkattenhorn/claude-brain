@@ -59,31 +59,45 @@ Persistent status indicator in Claude Code showing brain state at a glance.
 
 Extend brain sync beyond Claude Code CLI.
 
-### Claude Desktop App
+### Brain MCP Server (self-hosted)
 
-- [ ] **Research Desktop plugin/MCP architecture** — understand how Desktop stores project knowledge
-- [ ] **Desktop adapter** — sync brain CLAUDE.md and memory to Desktop's project knowledge format
-- [ ] **MCP server bridge** — expose brain data via MCP so Desktop can read it
+Single MCP server that serves brain data to both Desktop and Web. Hosted on homelab infrastructure
+(not in `~/.claude.json`) to avoid Claude Code picking it up — CLI uses the native plugin as designed.
 
-### Claude Web (claude.ai)
+- [ ] **Brain MCP server** — lightweight server that reads from brain git repo, exposes:
+  - `brain://claude-md` — current CLAUDE.md content
+  - `brain://memory` — memory entries (searchable)
+  - `brain://rules` — active rules
+  - `brain://skills` — skill catalog
+  - `brain://status` — sync state, last update, machine list
+- [ ] **Write-back support** — MCP tools for Desktop/Web to push changes back to brain repo
+- [ ] **Homelab deployment** — Docker container on homelab, Traefik reverse proxy, accessible via LAN/VPN
+- [ ] **Auto-refresh** — watch brain repo for changes, serve latest state
 
-- [ ] **API sync for Projects** — push CLAUDE.md content to claude.ai Project custom instructions via API
-- [ ] **Memory sync to Project knowledge** — export relevant memory entries as project documents
-- [ ] **Bi-directional sync** — pull changes made in web UI back to brain repo
+### Client Configuration
+
+- **Claude Code** — uses native plugin (no MCP needed, no config change)
+- **Claude Desktop** — add MCP server URL in Desktop settings only
+- **Claude Web** — connect via claude.ai MCP integration
 
 ### Architecture
 
 ```
                     Git Remote (OneDev/GitHub)
                            |
-              +------------+------------+
-              |            |            |
-         Claude Code   Desktop App  claude.ai
-         (plugin)      (MCP/adapter) (API sync)
-              |            |            |
-              +--------- Brain ---------+
-              (CLAUDE.md, memory, skills, rules)
+                     Brain Git Repo
+                      /          \
+                     /            \
+           Claude Code         Brain MCP Server
+           (native plugin)     (self-hosted, homelab)
+           direct file I/O        |         |
+                            Desktop App  claude.ai
+                            (MCP client) (MCP client)
 ```
+
+**Key design constraint:** The MCP server is never registered in `~/.claude.json` or
+Claude Code's MCP config. This prevents Claude Code from using it (it has the plugin)
+and avoids the duplicate-tool / conflicting-behavior problem.
 
 ## v1.0.0 — Production Ready
 
@@ -105,6 +119,10 @@ The upstream plugin has good architecture but several critical bugs, no CI/CD, a
 
 Claude Code supports status line configuration. Rather than polling, we update the status line as a side-effect of sync hooks — zero overhead when not syncing.
 
-### Desktop/Web sync strategy
+### Desktop/Web sync via MCP (not plugin)
 
-Claude Desktop uses MCP servers for external data. A lightweight MCP server that reads from the brain repo would let Desktop access brain data without a full plugin port. For claude.ai, the Projects API allows setting custom instructions programmatically.
+A single self-hosted MCP server bridges the brain repo to Desktop and Web. This is deliberately
+NOT registered in Claude Code's config — CLI uses the native plugin for direct file I/O.
+The MCP server is hosted on homelab infrastructure behind Traefik, accessible only via LAN/VPN.
+This avoids the problem where Claude Code picks up MCP servers meant for other clients and
+creates duplicate/conflicting tool behavior.

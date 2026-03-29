@@ -117,12 +117,19 @@ SCHEMA='{
 # ── Run analysis ───────────────────────────────────────────────────────────────
 log_info "Analyzing brain for evolution opportunities..."
 
+MERGE_MODEL="sonnet"
+EVOLVE_BUDGET="0.50"
+if [ -f "$DEFAULTS_FILE" ]; then
+  MERGE_MODEL=$(jq -r '.merge_model // "sonnet"' "$DEFAULTS_FILE")
+  EVOLVE_BUDGET=$(jq -r '.max_budget_usd // 0.50' "$DEFAULTS_FILE")
+fi
+
 RESULT=$(claude -p "$PROMPT" \
   --output-format json \
   --json-schema "$SCHEMA" \
-  --model sonnet \
+  --model "$MERGE_MODEL" \
   --max-turns 1 \
-  --max-budget-usd 0.50 \
+  --max-budget-usd "$EVOLVE_BUDGET" \
   2>/dev/null) || {
   log_error "Evolution analysis failed."
   exit 1
@@ -160,13 +167,45 @@ echo "$RESULT" | jq '.structured_output' > "${BRAIN_REPO}/meta/last-evolve.json"
 # In auto mode, apply high-confidence promotions automatically
 if $AUTO_MODE; then
   log_info "Auto-mode: Applying high-confidence promotions..."
-  
-  # Extract high-confidence promotions (not implemented yet - would need promotion logic)
-  # For now, just update last_evolved timestamp
+
+  applied=0
+
+  # Apply claude_md promotions — append to CLAUDE.md
+  claude_md_promos=$(echo "$promotions" | jq -r '[.[] | select(.type == "claude_md")] | .[] | .content')
+  if [ -n "$claude_md_promos" ]; then
+    local claude_md_file="${CLAUDE_DIR}/CLAUDE.md"
+    if [ -f "$claude_md_file" ]; then
+      while IFS= read -r promo_content; do
+        # Only append if not already present
+        if ! grep -qF "$promo_content" "$claude_md_file" 2>/dev/null; then
+          printf '\n%s\n' "$promo_content" >> "$claude_md_file"
+          applied=$((applied + 1))
+          log_info "Promoted to CLAUDE.md: ${promo_content:0:60}..."
+        fi
+      done <<< "$claude_md_promos"
+    fi
+  fi
+
+  # Apply rule promotions — create rule files
+  echo "$promotions" | jq -c '.[] | select(.type == "rule")' | while IFS= read -r rule_json; do
+    rule_content=$(echo "$rule_json" | jq -r '.content')
+    # Generate filename from first line or content hash
+    rule_name=$(echo "$rule_content" | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | head -c 40)
+    rule_file="${CLAUDE_DIR}/rules/${rule_name}.md"
+    if [ ! -f "$rule_file" ]; then
+      mkdir -p "${CLAUDE_DIR}/rules"
+      echo "$rule_content" > "$rule_file"
+      chmod 600 "$rule_file"
+      applied=$((applied + 1))
+      log_info "Promoted to rule: ${rule_name}"
+    fi
+  done
+
+  # Update last_evolved timestamp
   local_tmp=$(brain_mktemp)
   jq --arg ts "$(now_iso)" '.last_evolved = $ts' "$BRAIN_CONFIG" > "$local_tmp"
   mv "$local_tmp" "$BRAIN_CONFIG"
-  
-  log_info "Auto-evolve complete. High-confidence changes applied."
+
+  log_info "Auto-evolve complete. ${applied} promotion(s) applied."
   log_info "Evolution analysis saved to meta/last-evolve.json"
 fi

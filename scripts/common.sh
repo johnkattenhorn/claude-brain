@@ -59,7 +59,10 @@ normalize_path() {
   local path="$1"
   if is_wsl && echo "$path" | grep -q '^[A-Za-z]:'; then
     # Convert C:\Users\... to /mnt/c/Users/...
-    echo "$path" | sed 's|^\([A-Za-z]\):|/mnt/\L\1|' | sed 's|\\|/|g'
+    # Use tr for lowercase (portable — GNU sed \L doesn't work on macOS/BSD)
+    local drive_letter
+    drive_letter=$(echo "$path" | cut -c1 | tr '[:upper:]' '[:lower:]')
+    echo "$path" | sed "s|^[A-Za-z]:|/mnt/${drive_letter}|" | sed 's|\\|/|g'
   else
     echo "$path"
   fi
