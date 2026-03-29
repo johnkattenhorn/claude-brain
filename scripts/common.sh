@@ -623,7 +623,8 @@ decode_project_path() {
   local encoded="$1"
   # First restore leading slash, then un-double hyphens temporarily,
   # then convert remaining single hyphens to slashes, then restore hyphens
-  echo "$encoded" | sed 's/^-/\//' | sed 's/--/\x00/g' | sed 's/-/\//g' | sed 's/\x00/-/g'
+  # Uses §§ as placeholder instead of \x00 (which fails on macOS/BSD sed)
+  echo "$encoded" | sed 's/^-/\//' | sed 's/--/§§/g' | sed 's/-/\//g' | sed 's/§§/-/g'
 }
 
 encode_project_path() {
@@ -635,8 +636,16 @@ encode_project_path() {
 # Extract a human-friendly project name from encoded path
 project_name_from_encoded() {
   local encoded="$1"
-  # Take the last segment of the decoded path
-  local decoded
-  decoded=$(decode_project_path "$encoded")
-  basename "$decoded"
+  # The encoding is lossy: /foo/bar-baz → -foo-bar-baz (single hyphens for both / and -)
+  # We can't perfectly reverse it, but the last segment after the final known separator
+  # is usually the project name. Strategy: take everything after the last path-like prefix.
+  # Common prefixes: -Users-*-Code-, -home-*-Code-, -home-*-
+  local name
+  # Strip common path prefixes to get the project portion
+  name=$(echo "$encoded" | sed -E 's|^-Users-[^-]+-Code-||; s|^-home-[^-]+-Code-||; s|^-home-[^-]+-||; s|^-||')
+  # Restore doubled hyphens to single (these are real hyphens in the name)
+  name=$(echo "$name" | sed 's/--/-/g')
+  # If still empty, fall back to the full encoded string
+  [ -z "$name" ] && name="$encoded"
+  echo "$name"
 }

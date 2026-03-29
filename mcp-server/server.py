@@ -110,8 +110,10 @@ def get_memory_index() -> str:
 
     index = {}
     for project, entries in auto_memory.items():
-        if isinstance(entries, dict):
-            index[project] = list(entries.keys())
+        if isinstance(entries, dict) and entries:
+            # Use "unknown-project" for empty keys (caused by encoding bug)
+            key = project if project else "unknown-project"
+            index[key] = list(entries.keys())
 
     return json.dumps(index, indent=2) if index else "No memory entries in consolidated brain."
 
@@ -182,7 +184,9 @@ def get_sync_log() -> str:
 
 @mcp.tool()
 def search_memory(query: str, limit: int = 10) -> str:
-    """Search all memory entries across projects for a keyword or phrase."""
+    """Search all brain memory entries for a keyword or phrase.
+    Returns matching lines from memory files across all projects.
+    Example: search_memory("Akka.NET") or search_memory("direct reports")"""
     brain = get_brain()
     auto_memory = brain.get("experiential", {}).get("auto_memory", {})
     results = []
@@ -190,13 +194,14 @@ def search_memory(query: str, limit: int = 10) -> str:
     for project, entries in auto_memory.items():
         if not isinstance(entries, dict):
             continue
+        project_name = project if project else "unknown-project"
         for entry_name, entry_data in entries.items():
             content = entry_data.get("content", "") if isinstance(entry_data, dict) else ""
             if query.lower() in content.lower():
                 lines = content.split("\n")
                 matching_lines = [l.strip() for l in lines if query.lower() in l.lower()]
                 results.append({
-                    "project": project,
+                    "project": project_name,
                     "file": entry_name,
                     "matches": matching_lines[:3],
                 })
@@ -210,7 +215,9 @@ def search_memory(query: str, limit: int = 10) -> str:
 
 @mcp.tool()
 def refresh_brain() -> str:
-    """Pull latest brain data from the git remote. Call this to get fresh data."""
+    """Pull latest brain data from the git remote.
+    Call this before reading data to ensure you have the most recent sync from all machines.
+    This does a 'git pull' on the brain repository."""
     try:
         result = subprocess.run(
             ["git", "-C", str(BRAIN_REPO), "pull", "origin", "main"],
@@ -228,7 +235,9 @@ def refresh_brain() -> str:
 
 @mcp.tool()
 def get_machine_snapshot(machine_id: str = "") -> str:
-    """Get a specific machine's brain snapshot. Leave empty to list available machines."""
+    """Get a machine's brain snapshot summary. Call with no arguments to list all machines
+    and their hex IDs. Then call with a specific hex ID (e.g. '302c2345') to get details.
+    IMPORTANT: Use the hex ID (like '302c2345'), not the hostname."""
     machines_dir = BRAIN_REPO / "machines"
     if not machines_dir.is_dir():
         return json.dumps({"error": "No machines directory found."})
