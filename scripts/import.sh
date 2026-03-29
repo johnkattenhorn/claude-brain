@@ -8,6 +8,7 @@ INPUT="${1:-${BRAIN_REPO}/consolidated/brain.json}"
 QUIET="${BRAIN_QUIET:-false}"
 SKIP_VALIDATION=false
 NO_BACKUP=false
+SYNC_CATEGORIES="all"
 
 # Parse extra flags
 shift || true
@@ -16,9 +17,18 @@ while [ $# -gt 0 ]; do
     --skip-validation) SKIP_VALIDATION=true; shift ;;
     --no-backup) NO_BACKUP=true; shift ;;
     --quiet) QUIET=true; BRAIN_QUIET=true; shift ;;
+    --categories) SYNC_CATEGORIES="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
+
+# Category check helper
+should_sync() {
+  local cat="$1"
+  [ "$SYNC_CATEGORIES" = "all" ] && return 0
+  echo ",$SYNC_CATEGORIES," | grep -q ",$cat," && return 0
+  return 1
+}
 
 if [ ! -f "$INPUT" ]; then
   log_error "Consolidated brain not found: ${INPUT}"
@@ -151,33 +161,44 @@ import_brain() {
   fi
 
   # Declarative: CLAUDE.md
+  if should_sync "claude_md"; then
     local claude_md_content
     claude_md_content=$(echo "$brain" | jq -r '.declarative.claude_md.content // empty')
     if [ -n "$claude_md_content" ]; then
       write_if_changed "${CLAUDE_DIR}/CLAUDE.md" "$claude_md_content"
     fi
+  fi
 
   # Declarative: rules
+  if should_sync "rules"; then
     local rules
     rules=$(echo "$brain" | jq '.declarative.rules // {}')
     import_dir_entries "${CLAUDE_DIR}/rules" "$rules"
+  fi
 
   # Procedural: skills
+  if should_sync "skills"; then
     local skills
     skills=$(echo "$brain" | jq '.procedural.skills // {}')
     import_dir_entries "${CLAUDE_DIR}/skills" "$skills"
+  fi
 
   # Procedural: agents
+  if should_sync "agents"; then
     local agents
     agents=$(echo "$brain" | jq '.procedural.agents // {}')
     import_dir_entries "${CLAUDE_DIR}/agents" "$agents"
+  fi
 
   # Procedural: output styles
+  if should_sync "output_styles"; then
     local output_styles
     output_styles=$(echo "$brain" | jq '.procedural.output_styles // {}')
     import_dir_entries "${CLAUDE_DIR}/output-styles" "$output_styles"
+  fi
 
   # Experiential: auto memory
+  if should_sync "memory"; then
     echo "$brain" | jq -r '.experiential.auto_memory // {} | keys[]' 2>/dev/null | while read -r project; do
       local entries
       entries=$(echo "$brain" | jq --arg p "$project" '.experiential.auto_memory[$p] // {}')
@@ -209,8 +230,10 @@ import_brain() {
       entries=$(echo "$brain" | jq --arg a "$agent" '.experiential.agent_memory[$a] // {}')
       import_dir_entries "${CLAUDE_DIR}/agent-memory/${agent}" "$entries"
     done
+  fi
 
   # Environmental: settings (deep merge, preserve local env AND local mcpServers)
+  if should_sync "settings"; then
     local new_settings
     new_settings=$(echo "$brain" | jq '.environmental.settings.content // null')
     if [ "$new_settings" != "null" ] && [ -f "${CLAUDE_DIR}/settings.json" ]; then
@@ -249,6 +272,7 @@ import_brain() {
         log_info "Created: keybindings.json"
       fi
     fi
+  fi
 
   # Shared namespace: import to local directories (skills, agents, rules)
     # Shared skills

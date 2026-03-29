@@ -8,6 +8,7 @@ MEMORY_ONLY=false
 OUTPUT=""
 QUIET=false
 SKIP_SECRET_SCAN=false
+SYNC_CATEGORIES="all"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -15,9 +16,18 @@ while [ $# -gt 0 ]; do
     --output) OUTPUT="$2"; shift 2 ;;
     --quiet) QUIET=true; BRAIN_QUIET=true; shift ;;
     --skip-secret-scan) SKIP_SECRET_SCAN=true; shift ;;
+    --categories) SYNC_CATEGORIES="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
+
+# Category check helper: returns 0 if category should be synced
+should_sync() {
+  local cat="$1"
+  [ "$SYNC_CATEGORIES" = "all" ] && return 0
+  echo ",$SYNC_CATEGORIES," | grep -q ",$cat," && return 0
+  return 1
+}
 
 # ── Helper: read file content and hash ─────────────────────────────────────────
 file_entry() {
@@ -79,28 +89,28 @@ build_snapshot() {
 
   # Declarative
   local claude_md="null"
-  if [ -f "${CLAUDE_DIR}/CLAUDE.md" ]; then
+  if should_sync "claude_md" && [ -f "${CLAUDE_DIR}/CLAUDE.md" ]; then
     claude_md=$(file_entry "${CLAUDE_DIR}/CLAUDE.md")
   fi
 
   local rules="{}"
-  if [ -d "${CLAUDE_DIR}/rules" ]; then
+  if should_sync "rules" && [ -d "${CLAUDE_DIR}/rules" ]; then
     rules=$(scan_dir_entries "${CLAUDE_DIR}/rules")
   fi
 
   # Procedural
   local skills="{}"
-  if [ -d "${CLAUDE_DIR}/skills" ]; then
+  if should_sync "skills" && [ -d "${CLAUDE_DIR}/skills" ]; then
     skills=$(scan_dir_entries "${CLAUDE_DIR}/skills")
   fi
 
   local agents="{}"
-  if [ -d "${CLAUDE_DIR}/agents" ]; then
+  if should_sync "agents" && [ -d "${CLAUDE_DIR}/agents" ]; then
     agents=$(scan_dir_entries "${CLAUDE_DIR}/agents")
   fi
 
   local output_styles="{}"
-  if [ -d "${CLAUDE_DIR}/output-styles" ]; then
+  if should_sync "output_styles" && [ -d "${CLAUDE_DIR}/output-styles" ]; then
     output_styles=$(scan_dir_entries "${CLAUDE_DIR}/output-styles")
   fi
 
@@ -122,7 +132,7 @@ build_snapshot() {
 
   # Experiential: auto memory
   local auto_memory="{}"
-  if [ -d "${CLAUDE_DIR}/projects" ]; then
+  if should_sync "memory" && [ -d "${CLAUDE_DIR}/projects" ]; then
       auto_memory=$(find "${CLAUDE_DIR}/projects" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | while read -r proj_dir; do
         local mem_dir="${proj_dir}/memory"
         if [ -d "$mem_dir" ] && [ "$(ls -A "$mem_dir" 2>/dev/null)" ]; then
@@ -139,7 +149,7 @@ build_snapshot() {
 
   # Experiential: agent memory
   local agent_memory="{}"
-  if [ -d "${CLAUDE_DIR}/agent-memory" ]; then
+  if should_sync "memory" && [ -d "${CLAUDE_DIR}/agent-memory" ]; then
       agent_memory=$(find "${CLAUDE_DIR}/agent-memory" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | while read -r agent_dir; do
         local agent_name
         agent_name=$(basename "$agent_dir")
@@ -153,7 +163,7 @@ build_snapshot() {
 
   # Environmental: settings (strip env vars AND mcpServers — MCP exported separately)
   local settings="null"
-  if [ -f "${CLAUDE_DIR}/settings.json" ]; then
+  if should_sync "settings" && [ -f "${CLAUDE_DIR}/settings.json" ]; then
     settings=$(jq 'del(.env) | del(.mcpServers)' "${CLAUDE_DIR}/settings.json")
   fi
 
@@ -165,7 +175,7 @@ build_snapshot() {
   # Environmental: keybindings
   local keybindings="null"
   local keybindings_hash="null"
-  if [ -f "${CLAUDE_DIR}/keybindings.json" ]; then
+  if should_sync "settings" && [ -f "${CLAUDE_DIR}/keybindings.json" ]; then
     keybindings=$(cat "${CLAUDE_DIR}/keybindings.json")
     keybindings_hash=$(file_hash "${CLAUDE_DIR}/keybindings.json")
   fi

@@ -137,7 +137,12 @@ else
 fi
 
 # Apply consolidated brain locally (with validation and backup)
-"${SCRIPT_DIR}/import.sh" "${BRAIN_REPO}/consolidated/brain.json"
+import_args=("${BRAIN_REPO}/consolidated/brain.json")
+profile_cats=$(get_profile_categories)
+if [ "$profile_cats" != "all" ]; then
+  import_args+=(--categories "$profile_cats")
+fi
+"${SCRIPT_DIR}/import.sh" "${import_args[@]}"
 
 # Commit and push consolidated
 brain_git add consolidated/ meta/

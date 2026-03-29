@@ -563,6 +563,58 @@ list_backups() {
   fi
 }
 
+# ── Sync Profiles ─────────────────────────────────────────────────────────────
+resolve_profile() {
+  # Resolve a profile name to its categories string
+  # Usage: resolve_profile "memory-only" → "memory,claude_md"
+  local profile_name="$1"
+
+  # Check brain-config.json for user-defined profiles first
+  if [ -f "$BRAIN_CONFIG" ]; then
+    local user_cats
+    user_cats=$(jq -r --arg p "$profile_name" '.profiles[$p].categories // empty' "$BRAIN_CONFIG" 2>/dev/null)
+    if [ -n "$user_cats" ]; then
+      echo "$user_cats"
+      return 0
+    fi
+  fi
+
+  # Fall back to defaults.json
+  if [ -f "$DEFAULTS_FILE" ]; then
+    local default_cats
+    default_cats=$(jq -r --arg p "$profile_name" '.profiles[$p].categories // empty' "$DEFAULTS_FILE" 2>/dev/null)
+    if [ -n "$default_cats" ]; then
+      echo "$default_cats"
+      return 0
+    fi
+  fi
+
+  # Profile not found
+  return 1
+}
+
+get_active_profile() {
+  # Get the active profile name from brain-config.json
+  if [ -f "$BRAIN_CONFIG" ]; then
+    jq -r '.active_profile // "full"' "$BRAIN_CONFIG" 2>/dev/null
+  else
+    echo "full"
+  fi
+}
+
+get_profile_categories() {
+  # Get categories for the active profile (or "all" if none set)
+  local profile
+  profile=$(get_active_profile)
+  local cats
+  cats=$(resolve_profile "$profile" 2>/dev/null || echo "")
+  if [ -n "$cats" ]; then
+    echo "$cats"
+  else
+    echo "all"
+  fi
+}
+
 # ── Path Encoding/Decoding ─────────────────────────────────────────────────────
 # Claude Code encodes project paths: /home/user/my-project → -home-user-my--project
 # Hyphens in names are doubled: my-project → my--project

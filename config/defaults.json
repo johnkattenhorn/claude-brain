@@ -13,5 +13,19 @@
   "encryption": {
     "enabled": false
   },
-  "evolve_interval_days": 7
+  "evolve_interval_days": 7,
+  "profiles": {
+    "full": {
+      "description": "Sync everything (default)",
+      "categories": "all"
+    },
+    "memory-only": {
+      "description": "Only sync memory and CLAUDE.md — no skills, agents, or settings",
+      "categories": "memory,claude_md"
+    },
+    "knowledge": {
+      "description": "Sync knowledge artifacts only — no settings or environmental config",
+      "categories": "memory,claude_md,rules,skills,agents"
+    }
+  }
 }
