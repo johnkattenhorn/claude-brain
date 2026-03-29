@@ -1,0 +1,31 @@
+services:
+  brain-mcp:
+    build: .
+    container_name: brain-mcp
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount the brain git repo (read-only for safety)
+      - ~/.claude/brain-repo:/data/brain-repo:ro
+      # Mount claude config dir (read-only except for CLAUDE.md write-back)
+      - ~/.claude:/data/claude
+      # Mount the plugin scripts (for trigger_sync tool)
+      - ../:/app/plugin:ro
+    environment:
+      - BRAIN_REPO=/data/brain-repo
+      - CLAUDE_DIR=/data/claude
+      - CLAUDE_PLUGIN_ROOT=/app/plugin
+    labels:
+      # Traefik integration (adjust domain to your setup)
+      - "traefik.enable=true"
+      - "traefik.http.routers.brain-mcp.rule=Host(`brain.khn.family`)"
+      - "traefik.http.routers.brain-mcp.entrypoints=websecure"
+      - "traefik.http.routers.brain-mcp.tls.certresolver=letsencrypt"
+      - "traefik.http.services.brain-mcp.loadbalancer.server.port=8080"
+    networks:
+      - traefik
+
+networks:
+  traefik:
+    external: true
