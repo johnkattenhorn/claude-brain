@@ -187,22 +187,29 @@ brain_git() {
 
 brain_push_with_retry() {
   local max_attempts="${1:-3}"
-  local delay="${2:-2}"
+  local base_delay="${2:-2}"
   local attempt=1
 
   while [ "$attempt" -le "$max_attempts" ]; do
     if brain_git push origin main 2>/dev/null; then
       return 0
     fi
-    # Pull rebase and retry
-    brain_git pull --rebase origin main 2>/dev/null || true
-    attempt=$((attempt + 1))
-    if [ "$attempt" -le "$max_attempts" ]; then
+
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      # Exponential backoff: 2s, 4s, 8s...
+      local delay=$(( base_delay * (2 ** (attempt - 1)) ))
+      log_warn "Push attempt ${attempt}/${max_attempts} failed. Retrying in ${delay}s..."
+      # Pull rebase to incorporate remote changes before retry
+      brain_git pull --rebase origin main 2>/dev/null || {
+        brain_git rebase --abort 2>/dev/null || true
+        log_warn "Rebase failed during push retry. Skipping rebase."
+      }
       sleep "$delay"
     fi
+    attempt=$((attempt + 1))
   done
 
-  echo "WARNING: Push failed after $max_attempts attempts." >&2
+  log_warn "Push failed after $max_attempts attempts."
   return 1
 }
 
@@ -648,4 +655,241 @@ project_name_from_encoded() {
   # If still empty, fall back to the full encoded string
   [ -z "$name" ] && name="$encoded"
   echo "$name"
+}
+
+# ── API Call Logging & Protection ─────────────────────────────────────────────
+# Centralized tracking of all claude -p API calls for debugging and cost control
+
+BRAIN_API_LOG="${HOME}/.cache/brain-api-calls.jsonl"
+BRAIN_KILL_SWITCH="${HOME}/.cache/brain-kill-switch.json"
+BRAIN_CIRCUIT_BREAKER="${HOME}/.cache/brain-circuit-breaker.json"
+BRAIN_API_COOLDOWN_SECONDS=300  # 5 minutes between API calls
+
+# Log every claude -p invocation with structured data
+log_api_call() {
+  local caller="$1" status="$2" duration_ms="${3:-0}" budget="${4:-0}" error_msg="${5:-}"
+  mkdir -p "$(dirname "$BRAIN_API_LOG")"
+  local entry
+  entry=$(jq -n \
+    --arg ts "$(now_iso)" \
+    --arg caller "$caller" \
+    --arg status "$status" \
+    --argjson duration "$duration_ms" \
+    --arg budget "$budget" \
+    --arg error "$error_msg" \
+    --arg machine "$(get_machine_name 2>/dev/null || echo unknown)" \
+    --arg pid "$$" \
+    '{timestamp: $ts, caller: $caller, status: $status, duration_ms: $duration, budget: $budget, error: $error, machine: $machine, pid: $pid}')
+  echo "$entry" >> "$BRAIN_API_LOG"
+
+  # Prune log to last 500 entries if it gets too large
+  if [ -f "$BRAIN_API_LOG" ]; then
+    local line_count
+    line_count=$(wc -l < "$BRAIN_API_LOG" | tr -d ' ')
+    if [ "$line_count" -gt 500 ]; then
+      local tmp
+      tmp=$(brain_mktemp)
+      tail -n 500 "$BRAIN_API_LOG" > "$tmp" && mv "$tmp" "$BRAIN_API_LOG"
+    fi
+  fi
+}
+
+# ── Kill Switch ───────────────────────────────────────────────────────────────
+# Ultimate safety valve — blocks ALL claude -p calls when active
+
+is_kill_switch_active() {
+  if [ -f "$BRAIN_KILL_SWITCH" ]; then
+    local active
+    active=$(jq -r '.active // false' "$BRAIN_KILL_SWITCH" 2>/dev/null || echo "false")
+    [ "$active" = "true" ]
+  else
+    return 1
+  fi
+}
+
+activate_kill_switch() {
+  local reason="${1:-manual}" triggered_by="${2:-unknown}"
+  mkdir -p "$(dirname "$BRAIN_KILL_SWITCH")"
+  jq -n \
+    --arg ts "$(now_iso)" \
+    --arg reason "$reason" \
+    --arg triggered_by "$triggered_by" \
+    '{active: true, activated_at: $ts, reason: $reason, triggered_by: $triggered_by}' \
+    > "$BRAIN_KILL_SWITCH"
+  log_warn "KILL SWITCH ACTIVATED: $reason (by $triggered_by)"
+  log_api_call "kill-switch" "activated" 0 "0" "$reason"
+}
+
+deactivate_kill_switch() {
+  if [ -f "$BRAIN_KILL_SWITCH" ]; then
+    local tmp
+    tmp=$(brain_mktemp)
+    jq '.active = false | .deactivated_at = "'"$(now_iso)"'"' "$BRAIN_KILL_SWITCH" > "$tmp"
+    mv "$tmp" "$BRAIN_KILL_SWITCH"
+    log_info "Kill switch deactivated."
+    log_api_call "kill-switch" "deactivated" 0 "0" ""
+  fi
+}
+
+# ── Circuit Breaker ───────────────────────────────────────────────────────────
+# Auto-trips after N consecutive failures within a time window
+
+CIRCUIT_BREAKER_MAX_FAILURES=3
+CIRCUIT_BREAKER_WINDOW_SECONDS=600  # 10 minutes
+
+circuit_breaker_check() {
+  # Returns 0 if circuit is closed (OK to call), 1 if open (blocked)
+  if [ ! -f "$BRAIN_CIRCUIT_BREAKER" ]; then
+    return 0
+  fi
+
+  local state
+  state=$(jq -r '.state // "closed"' "$BRAIN_CIRCUIT_BREAKER" 2>/dev/null || echo "closed")
+
+  if [ "$state" = "open" ]; then
+    # Check if enough time has passed to try again (half-open)
+    local tripped_at current_ts elapsed
+    tripped_at=$(jq -r '.tripped_at_epoch // 0' "$BRAIN_CIRCUIT_BREAKER" 2>/dev/null || echo "0")
+    current_ts=$(date +%s)
+    elapsed=$(( current_ts - tripped_at ))
+    if [ "$elapsed" -ge "$CIRCUIT_BREAKER_WINDOW_SECONDS" ]; then
+      log_info "Circuit breaker: cooldown expired, allowing retry (half-open)."
+      return 0
+    fi
+    log_warn "Circuit breaker OPEN — blocking API call (${elapsed}s/${CIRCUIT_BREAKER_WINDOW_SECONDS}s cooldown remaining)."
+    return 1
+  fi
+
+  return 0
+}
+
+circuit_breaker_record_success() {
+  mkdir -p "$(dirname "$BRAIN_CIRCUIT_BREAKER")"
+  jq -n '{state: "closed", consecutive_failures: 0, last_success: "'"$(now_iso)"'"}' \
+    > "$BRAIN_CIRCUIT_BREAKER"
+}
+
+circuit_breaker_record_failure() {
+  local caller="${1:-unknown}"
+  mkdir -p "$(dirname "$BRAIN_CIRCUIT_BREAKER")"
+
+  local current_failures=0
+  if [ -f "$BRAIN_CIRCUIT_BREAKER" ]; then
+    current_failures=$(jq -r '.consecutive_failures // 0' "$BRAIN_CIRCUIT_BREAKER" 2>/dev/null || echo "0")
+  fi
+  current_failures=$((current_failures + 1))
+
+  if [ "$current_failures" -ge "$CIRCUIT_BREAKER_MAX_FAILURES" ]; then
+    # Trip the circuit breaker
+    jq -n \
+      --argjson failures "$current_failures" \
+      --arg ts "$(now_iso)" \
+      --argjson epoch "$(date +%s)" \
+      --arg caller "$caller" \
+      '{state: "open", consecutive_failures: $failures, tripped_at: $ts, tripped_at_epoch: $epoch, tripped_by: $caller}' \
+      > "$BRAIN_CIRCUIT_BREAKER"
+    log_warn "Circuit breaker TRIPPED after ${current_failures} consecutive failures."
+
+    # Auto-activate kill switch if circuit breaker trips
+    activate_kill_switch "Circuit breaker tripped after ${current_failures} failures" "$caller"
+  else
+    jq -n \
+      --argjson failures "$current_failures" \
+      --arg ts "$(now_iso)" \
+      '{state: "closed", consecutive_failures: $failures, last_failure: $ts}' \
+      > "$BRAIN_CIRCUIT_BREAKER"
+    log_warn "API failure ${current_failures}/${CIRCUIT_BREAKER_MAX_FAILURES} — circuit breaker will trip at ${CIRCUIT_BREAKER_MAX_FAILURES}."
+  fi
+}
+
+# ── API Cooldown ──────────────────────────────────────────────────────────────
+# Prevents API calls more frequently than BRAIN_API_COOLDOWN_SECONDS
+
+BRAIN_LAST_API_CALL_FILE="${HOME}/.cache/brain-last-api-call"
+
+check_api_cooldown() {
+  local caller="${1:-unknown}"
+  if [ ! -f "$BRAIN_LAST_API_CALL_FILE" ]; then
+    return 0
+  fi
+
+  local last_call_ts current_ts elapsed
+  last_call_ts=$(cat "$BRAIN_LAST_API_CALL_FILE" 2>/dev/null || echo "0")
+  current_ts=$(date +%s)
+  elapsed=$(( current_ts - last_call_ts ))
+
+  if [ "$elapsed" -lt "$BRAIN_API_COOLDOWN_SECONDS" ]; then
+    local remaining
+    remaining=$(( BRAIN_API_COOLDOWN_SECONDS - elapsed ))
+    log_warn "API cooldown active — ${remaining}s remaining (caller: $caller). Skipping."
+    return 1
+  fi
+  return 0
+}
+
+record_api_call_time() {
+  mkdir -p "$(dirname "$BRAIN_LAST_API_CALL_FILE")"
+  date +%s > "$BRAIN_LAST_API_CALL_FILE"
+}
+
+# ── Guarded Claude API Call ───────────────────────────────────────────────────
+# Single entry point for all claude -p calls with full protection
+
+guarded_claude_call() {
+  # Usage: guarded_claude_call <caller_name> <prompt_file> <schema> <model> <budget> [extra_args...]
+  # Returns: 0 on success (result in stdout), 1 on failure
+  local caller="$1" prompt_file="$2" schema="$3" model="$4" budget="$5"
+  shift 5
+
+  # Gate 1: Kill switch
+  if is_kill_switch_active; then
+    local reason
+    reason=$(jq -r '.reason // "unknown"' "$BRAIN_KILL_SWITCH" 2>/dev/null || echo "unknown")
+    log_warn "KILL SWITCH ACTIVE ($reason) — blocking $caller API call."
+    log_api_call "$caller" "blocked:kill-switch" 0 "$budget" "$reason"
+    return 1
+  fi
+
+  # Gate 2: Circuit breaker
+  if ! circuit_breaker_check; then
+    log_api_call "$caller" "blocked:circuit-breaker" 0 "$budget" ""
+    return 1
+  fi
+
+  # Gate 3: Cooldown
+  if ! check_api_cooldown "$caller"; then
+    log_api_call "$caller" "blocked:cooldown" 0 "$budget" ""
+    return 1
+  fi
+
+  # All gates passed — make the call
+  record_api_call_time
+  local start_ts result exit_code duration_ms
+  start_ts=$(date +%s)
+
+  result=$(claude -p "$(cat "$prompt_file")" \
+    --bare \
+    --output-format json \
+    --json-schema "$schema" \
+    --model "$model" \
+    --max-turns 1 \
+    --max-budget-usd "$budget" \
+    "$@" \
+    2>/dev/null)
+  exit_code=$?
+
+  local end_ts
+  end_ts=$(date +%s)
+  duration_ms=$(( (end_ts - start_ts) * 1000 ))
+
+  if [ $exit_code -eq 0 ] && [ -n "$result" ]; then
+    log_api_call "$caller" "success" "$duration_ms" "$budget" ""
+    circuit_breaker_record_success
+    echo "$result"
+    return 0
+  else
+    log_api_call "$caller" "failure" "$duration_ms" "$budget" "exit_code=$exit_code"
+    circuit_breaker_record_failure "$caller"
+    return 1
+  fi
 }

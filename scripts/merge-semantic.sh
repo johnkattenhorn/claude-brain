@@ -96,7 +96,8 @@ content_hash=$(echo "$all_content_hash" | compute_hash)
 unique_hashes=()
 for snapshot_file in "${SNAPSHOTS[@]}"; do
   snapshot_hash=$(jq -r '.declarative.claude_md.content // ""' "$snapshot_file" | compute_hash)
-  if [[ ! " ${unique_hashes[*]} " =~ " ${snapshot_hash} " ]]; then
+  hash_pattern=" ${snapshot_hash} "
+  if [[ ! " ${unique_hashes[*]} " =~ $hash_pattern ]]; then
     unique_hashes+=("$snapshot_hash")
   fi
 done
@@ -151,30 +152,26 @@ SCHEMA='{
   "required": ["merged_claude_md", "merged_memory_entries", "conflicts", "deduped"]
 }'
 
-# ── Call claude -p ─────────────────────────────────────────────────────────────
+# ── Call claude -p (guarded) ───────────────────────────────────────────────────
 log_info "Running semantic merge via claude..."
 
-RESULT=$(claude -p "$(cat "$PROMPT_FILE")" \
-  --bare \
-  --output-format json \
-  --json-schema "$SCHEMA" \
-  --model "$MERGE_MODEL" \
-  --max-turns 1 \
-  --max-budget-usd "$MAX_BUDGET" \
-  2>/dev/null) || {
-  log_warn "claude -p failed. Falling back to concatenation merge."
+fallback_merge() {
+  log_warn "Falling back to concatenation merge."
   # Fallback: use first snapshot as base, append others with markers
-  base_snapshot="${SNAPSHOTS[0]}"
+  local base_snapshot="${SNAPSHOTS[0]}"
   cp "$base_snapshot" "$OUTPUT"
-  
+
   # Collect unique CLAUDE.md content to append
+  local base_claude_md
   base_claude_md=$(jq -r '.declarative.claude_md.content // ""' "$base_snapshot")
-  fallback_claude_md="$base_claude_md"
-  
+  local fallback_claude_md="$base_claude_md"
+
   for snapshot_file in "${SNAPSHOTS[@]:1}"; do
+    local machine_name
     machine_name=$(jq -r '.machine.name // "unknown"' "$snapshot_file")
+    local claude_md_content
     claude_md_content=$(jq -r '.declarative.claude_md.content // ""' "$snapshot_file")
-    
+
     if [ -n "$claude_md_content" ] && [ "$claude_md_content" != "$base_claude_md" ]; then
       fallback_claude_md="${fallback_claude_md}
 
@@ -182,14 +179,16 @@ RESULT=$(claude -p "$(cat "$PROMPT_FILE")" \
 ${claude_md_content}"
     fi
   done
-  
+
   # Update output with concatenated CLAUDE.md
+  local tmp
   tmp=$(brain_mktemp)
   jq --arg content "$fallback_claude_md" \
     '.declarative.claude_md.content = $content' "$OUTPUT" > "$tmp" && mv "$tmp" "$OUTPUT"
 
   # Also merge memory from other snapshots (union by project+key, don't overwrite existing)
   for snapshot_file in "${SNAPSHOTS[@]:1}"; do
+    local local_tmp
     local_tmp=$(brain_mktemp)
     jq -s '.[0] as $base | .[1] as $other |
       $base | .experiential.auto_memory = (
@@ -197,8 +196,12 @@ ${claude_md_content}"
       )' "$OUTPUT" "$snapshot_file" > "$local_tmp" && mv "$local_tmp" "$OUTPUT"
   done
 
-  log_warn "Fallback merge used concatenation — run /brain-sync again when claude CLI is available for semantic merge."
+  log_warn "Fallback merge used concatenation. Semantic merge will be retried on next sync after cooldown."
   exit 0
+}
+
+RESULT=$(guarded_claude_call "merge-semantic" "$PROMPT_FILE" "$SCHEMA" "$MERGE_MODEL" "$MAX_BUDGET") || {
+  fallback_merge
 }
 
 # ── Parse result and update brain ──────────────────────────────────────────────

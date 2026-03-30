@@ -1,0 +1,9 @@
+# shellcheck configuration for claude-brain
+# Follow sourced files
+external-sources=true
+
+# SC2034: Unused variables — many are exported/used by sourcing scripts
+disable=SC2034
+
+# SC1091: Not following sourced files — handled by -x flag
+disable=SC1091

@@ -114,7 +114,7 @@ SCHEMA='{
   "required": ["promotions", "stale_entries", "summary"]
 }'
 
-# ── Run analysis ───────────────────────────────────────────────────────────────
+# ── Run analysis (guarded) ─────────────────────────────────────────────────────
 log_info "Analyzing brain for evolution opportunities..."
 
 MERGE_MODEL="sonnet"
@@ -124,15 +124,12 @@ if [ -f "$DEFAULTS_FILE" ]; then
   EVOLVE_BUDGET=$(jq -r '.max_budget_usd // 0.50' "$DEFAULTS_FILE")
 fi
 
-RESULT=$(claude -p "$PROMPT" \
-  --bare \
-  --output-format json \
-  --json-schema "$SCHEMA" \
-  --model "$MERGE_MODEL" \
-  --max-turns 1 \
-  --max-budget-usd "$EVOLVE_BUDGET" \
-  2>/dev/null) || {
-  log_error "Evolution analysis failed."
+# Write prompt to temp file for guarded call
+EVOLVE_PROMPT_FILE=$(brain_mktemp)
+echo "$PROMPT" > "$EVOLVE_PROMPT_FILE"
+
+RESULT=$(guarded_claude_call "evolve" "$EVOLVE_PROMPT_FILE" "$SCHEMA" "$MERGE_MODEL" "$EVOLVE_BUDGET") || {
+  log_error "Evolution analysis failed (API call blocked or errored)."
   exit 1
 }
 
@@ -174,7 +171,7 @@ if $AUTO_MODE; then
   # Apply claude_md promotions — append to CLAUDE.md
   claude_md_promos=$(echo "$promotions" | jq -r '[.[] | select(.type == "claude_md")] | .[] | .content')
   if [ -n "$claude_md_promos" ]; then
-    local claude_md_file="${CLAUDE_DIR}/CLAUDE.md"
+    claude_md_file="${CLAUDE_DIR}/CLAUDE.md"
     if [ -f "$claude_md_file" ]; then
       while IFS= read -r promo_content; do
         # Only append if not already present

@@ -7,11 +7,13 @@ source "${SCRIPT_DIR}/common.sh"
 QUIET=false
 AUTO_MERGE=false
 DRY_RUN=false
+AUTO_EVOLVE=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --quiet) QUIET=true; BRAIN_QUIET=true; shift ;;
     --auto-merge) AUTO_MERGE=true; shift ;;
+    --auto-evolve) AUTO_EVOLVE=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     *) shift ;;
   esac
@@ -79,7 +81,6 @@ for snapshot_file in "${BRAIN_REPO}"/machines/*/brain-snapshot.json; do
     if is_encrypted_content "$(cat "$snapshot_file")"; then
       if encryption_enabled && command -v age &>/dev/null; then
         # Decrypt to temp file
-        local decrypted_tmp
         decrypted_tmp=$(brain_mktemp)
         if decrypt_file "$snapshot_file" "$decrypted_tmp"; then
           snapshots+=("$decrypted_tmp")
@@ -162,12 +163,12 @@ fi
   jq --arg ts "$(now_iso)" '.last_pull = $ts' "$BRAIN_CONFIG" > "$local_tmp"
   mv "$local_tmp" "$BRAIN_CONFIG"
 
-# Check if auto-evolve is due
-if [ -f "$DEFAULTS_FILE" ]; then
+# Check if auto-evolve is due (only when explicitly requested via --auto-evolve)
+if $AUTO_EVOLVE && [ -f "$DEFAULTS_FILE" ]; then
   evolve_interval_days="" last_evolved="" days_since_evolve=""
   evolve_interval_days=$(jq -r '.evolve_interval_days // 7' "$DEFAULTS_FILE")
   last_evolved=$(jq -r '.last_evolved // null' "$BRAIN_CONFIG")
-  
+
   if [ "$last_evolved" = "null" ] || [ -z "$last_evolved" ]; then
     # Never evolved, set to now to start the timer
     local_tmp=$(brain_mktemp)
@@ -180,7 +181,7 @@ if [ -f "$DEFAULTS_FILE" ]; then
       last_evolved_ts=$(date -d "$last_evolved" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_evolved" +%s 2>/dev/null || echo "0")
       current_ts=$(date +%s)
       days_since_evolve=$(( (current_ts - last_evolved_ts) / 86400 ))
-      
+
       if [ "$days_since_evolve" -ge "$evolve_interval_days" ]; then
         log_info "Auto-evolve due (${days_since_evolve} days since last evolution)..."
         "${SCRIPT_DIR}/evolve.sh" --auto 2>/dev/null || {

@@ -508,25 +508,22 @@ MOCK
   git clone --bare "$BRAIN_REPO" "$bare_remote" 2>/dev/null || true
   (cd "$BRAIN_REPO" && git remote remove origin 2>/dev/null || true && git remote add origin "$bare_remote")
 
-  # Run pull.sh
-  bash "$PROJECT_DIR/scripts/pull.sh" --quiet 2>/dev/null || true
+  # Run pull.sh with --auto-evolve (required flag to enable auto-evolve)
+  bash "$PROJECT_DIR/scripts/pull.sh" --quiet --auto-evolve 2>/dev/null || true
 
   # Restore real evolve.sh
   cp "$backup_evolve" "$real_evolve"
 
   if [ -f "$HOME/.claude/evolve-triggered" ]; then
-    pass "Auto-evolve triggered after 8 days"
+    pass "Auto-evolve triggered after 8 days (with --auto-evolve flag)"
     rm -f "$HOME/.claude/evolve-triggered"
   else
     fail "Auto-evolve not triggered after 8 days"
   fi
 
-  # Now test that it does NOT trigger after 2 days
-  local two_days_ago
-  two_days_ago=$(date -d "2 days ago" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -v-2d -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
-  json_set "$BRAIN_CONFIG" "last_evolved" "$two_days_ago"
+  # Test that it does NOT trigger without --auto-evolve flag (even if due)
+  json_set "$BRAIN_CONFIG" "last_evolved" "$eight_days_ago"
 
-  # Mock evolve again
   cp "$real_evolve" "$backup_evolve"
   cat > "$real_evolve" <<'MOCK'
 #!/usr/bin/env bash
@@ -535,6 +532,29 @@ MOCK
   chmod +x "$real_evolve"
 
   bash "$PROJECT_DIR/scripts/pull.sh" --quiet 2>/dev/null || true
+
+  cp "$backup_evolve" "$real_evolve"
+
+  if [ ! -f "$HOME/.claude/evolve-triggered" ]; then
+    pass "Auto-evolve NOT triggered without --auto-evolve flag"
+  else
+    fail "Auto-evolve incorrectly triggered without --auto-evolve flag"
+    rm -f "$HOME/.claude/evolve-triggered"
+  fi
+
+  # Test that it does NOT trigger after 2 days (even with --auto-evolve)
+  local two_days_ago
+  two_days_ago=$(date -d "2 days ago" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -v-2d -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
+  json_set "$BRAIN_CONFIG" "last_evolved" "$two_days_ago"
+
+  cp "$real_evolve" "$backup_evolve"
+  cat > "$real_evolve" <<'MOCK'
+#!/usr/bin/env bash
+touch "$HOME/.claude/evolve-triggered"
+MOCK
+  chmod +x "$real_evolve"
+
+  bash "$PROJECT_DIR/scripts/pull.sh" --quiet --auto-evolve 2>/dev/null || true
 
   cp "$backup_evolve" "$real_evolve"
 
