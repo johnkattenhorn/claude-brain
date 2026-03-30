@@ -237,8 +237,10 @@ import_brain() {
     local new_settings
     new_settings=$(echo "$brain" | jq '.environmental.settings.content // null')
     if [ "$new_settings" != "null" ] && [ -f "${CLAUDE_DIR}/settings.json" ]; then
-      local tmp
+      local tmp tmp_remote
       tmp=$(brain_mktemp)
+      tmp_remote=$(brain_mktemp)
+      printf '%s\n' "$new_settings" > "$tmp_remote"
       # Merge: remote provides new keys, local always wins for existing keys
       # env and mcpServers are always preserved from local (machine-specific)
       jq -s '.[0] as $local | .[1] as $remote |
@@ -246,7 +248,7 @@ import_brain() {
         ($local.mcpServers // {}) as $local_mcp |
         (($remote // {}) | del(.env) | del(.mcpServers)) as $remote_clean |
         ($remote_clean * $local) | .env = $local_env | .mcpServers = $local_mcp' \
-        "${CLAUDE_DIR}/settings.json" <(echo "$new_settings") > "$tmp"
+        "${CLAUDE_DIR}/settings.json" "$tmp_remote" > "$tmp"
       mv "$tmp" "${CLAUDE_DIR}/settings.json"
       chmod 600 "${CLAUDE_DIR}/settings.json"
       log_info "Updated: settings.json (merged, local env and mcpServers preserved)"
@@ -261,14 +263,16 @@ import_brain() {
     new_keybindings=$(echo "$brain" | jq '.environmental.keybindings.content // null')
     if [ "$new_keybindings" != "null" ]; then
       if [ -f "${CLAUDE_DIR}/keybindings.json" ]; then
-        local tmp
+        local tmp tmp_remote_kb
         tmp=$(brain_mktemp)
+        tmp_remote_kb=$(brain_mktemp)
+        printf '%s\n' "$new_keybindings" > "$tmp_remote_kb"
         # Union keybindings (deduplicate by key+command)
         # Handle both formats: bare array [...] and object { "bindings": [...] }
         jq -s '
           def to_arr: if type == "array" then . elif type == "object" and has("bindings") then .bindings else [] end;
           { "bindings": ((.[0] | to_arr) + (.[1] | to_arr) | unique_by({key, command})) }
-        ' "${CLAUDE_DIR}/keybindings.json" <(echo "$new_keybindings") > "$tmp"
+        ' "${CLAUDE_DIR}/keybindings.json" "$tmp_remote_kb" > "$tmp"
         mv "$tmp" "${CLAUDE_DIR}/keybindings.json"
         log_info "Updated: keybindings.json (merged)"
       else
