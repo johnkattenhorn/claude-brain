@@ -867,7 +867,7 @@ guarded_claude_call() {
   local start_ts result exit_code duration_ms
   start_ts=$(date +%s)
 
-  result=$(claude -p "$(cat "$prompt_file")" \
+  result=$(cat "$prompt_file" | claude -p - \
     --bare \
     --output-format json \
     --json-schema "$schema" \
