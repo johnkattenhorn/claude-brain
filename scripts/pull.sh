@@ -77,8 +77,8 @@ decrypted_snapshots=()
 
 for snapshot_file in "${BRAIN_REPO}"/machines/*/brain-snapshot.json; do
   if [ -f "$snapshot_file" ]; then
-    # Check if snapshot is encrypted
-    if is_encrypted_content "$(cat "$snapshot_file")"; then
+    # Check if snapshot is encrypted (only read first line)
+    if head -1 "$snapshot_file" | grep -q "^-----BEGIN AGE ENCRYPTED FILE-----"; then
       if encryption_enabled && command -v age &>/dev/null; then
         # Decrypt to temp file
         decrypted_tmp=$(brain_mktemp)
@@ -124,20 +124,25 @@ else
       "${BRAIN_REPO}/consolidated/brain.json.merging"
   done
 
-  # Semantic merge: only run on manual sync (not in quiet/hook mode — too slow)
-  if ! $QUIET; then
-    "${SCRIPT_DIR}/merge-semantic.sh" \
-      "${BRAIN_REPO}/consolidated/brain.json" \
-      "${snapshots[@]}" || {
-      log_warn "Semantic merge failed. Using structured merge only."
-    }
-  else
+  # Semantic merge: skip in quiet/hook mode (too slow); only use structured fallback if needed
+  if $QUIET; then
     log_info "Skipping semantic merge (quiet mode). Run /brain-sync for full merge."
-  fi
-  
-  # Use the structurally merged version if semantic merge failed
-  if [ -f "${BRAIN_REPO}/consolidated/brain.json.merging" ]; then
-    mv "${BRAIN_REPO}/consolidated/brain.json.merging" "${BRAIN_REPO}/consolidated/brain.json"
+    if [ -f "${BRAIN_REPO}/consolidated/brain.json.merging" ]; then
+      mv "${BRAIN_REPO}/consolidated/brain.json.merging" "${BRAIN_REPO}/consolidated/brain.json"
+    fi
+  else
+    # Run N-way semantic merge on all snapshots at once
+    if "${SCRIPT_DIR}/merge-semantic.sh" \
+      "${BRAIN_REPO}/consolidated/brain.json" \
+      "${snapshots[@]}"; then
+      # Semantic merge succeeded — its output is brain.json; discard structured fallback
+      rm -f "${BRAIN_REPO}/consolidated/brain.json.merging"
+    else
+      log_warn "Semantic merge failed. Using structured merge only."
+      if [ -f "${BRAIN_REPO}/consolidated/brain.json.merging" ]; then
+        mv "${BRAIN_REPO}/consolidated/brain.json.merging" "${BRAIN_REPO}/consolidated/brain.json"
+      fi
+    fi
   fi
 fi
 
