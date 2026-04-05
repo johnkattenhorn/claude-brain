@@ -15,7 +15,7 @@
   </p>
 </p>
 
-> **Fork of [toroleapinc/claude-brain](https://github.com/toroleapinc/claude-brain)** by [Eddie Liang](https://github.com/toroleapinc). Original concept, architecture, and core implementation by the upstream project. This fork builds on that foundation with bug fixes, new features, and cross-surface support. See [What's Different](#whats-different-in-this-fork) below.
+> **Originally based on [toroleapinc/claude-brain](https://github.com/toroleapinc/claude-brain)** by [Eddie Liang](https://github.com/toroleapinc). Original concept, architecture, and core implementation by the upstream project. This fork builds on that foundation with bug fixes, new features, and cross-surface support. See [What's Different](#whats-different-in-this-fork) below.
 
 ---
 

@@ -67,7 +67,7 @@
 
 ```bash
 # 从插件市场安装
-/plugin marketplace add toroleapinc/claude-brain
+/plugin marketplace add johnkattenhorn/claude-brain
 /plugin install claude-brain
 ```
 

@@ -4,8 +4,8 @@ Thanks for your interest in contributing! claude-brain is an open-source Claude 
 
 ## Ways to contribute
 
-- **Bug reports** — found something broken? [Open an issue](https://github.com/toroleapinc/claude-brain/issues)
-- **Feature requests** — have an idea? Start a [discussion](https://github.com/toroleapinc/claude-brain/discussions)
+- **Bug reports** — found something broken? [Open an issue](https://github.com/johnkattenhorn/claude-brain/issues)
+- **Feature requests** — have an idea? Start a [discussion](https://github.com/johnkattenhorn/claude-brain/discussions)
 - **Code contributions** — fix bugs, add features, improve docs
 - **Share your experience** — blog posts, tweets, and word-of-mouth help the project grow
 
@@ -23,7 +23,7 @@ Thanks for your interest in contributing! claude-brain is an open-source Claude 
 
 ```bash
 # Clone the repo
-git clone https://github.com/toroleapinc/claude-brain.git
+git clone https://github.com/johnkattenhorn/claude-brain.git
 cd claude-brain
 
 # Run locally with Claude Code
@@ -65,7 +65,7 @@ Be kind, be constructive, be helpful. That's it.
 
 ## Reporting security issues
 
-If you discover a security vulnerability, please do NOT open a public issue. Instead, please use [GitHub's private vulnerability reporting](https://github.com/toroleapinc/claude-brain/security/advisories/new).
+If you discover a security vulnerability, please do NOT open a public issue. Instead, please use [GitHub's private vulnerability reporting](https://github.com/johnkattenhorn/claude-brain/security/advisories/new).
 
 ## License
 
