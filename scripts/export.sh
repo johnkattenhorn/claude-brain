@@ -194,56 +194,76 @@ build_snapshot() {
     mcp_servers=$(echo "$mcp_servers" | sed "s|${HOME}|\${HOME}|g")
   fi
 
-  # Assemble full snapshot
+  # Assemble full snapshot using temp files to avoid ARG_MAX / MAX_ARG_STRLEN limits
+  local _tmp_dir
+  _tmp_dir=$(mktemp -d)
+  _BRAIN_TEMP_FILES+=("$_tmp_dir")
+
+  echo "${claude_md:-null}" > "$_tmp_dir/claude_md.json"
+  echo "$rules" > "$_tmp_dir/rules.json"
+  echo "$skills" > "$_tmp_dir/skills.json"
+  echo "$agents" > "$_tmp_dir/agents.json"
+  echo "$output_styles" > "$_tmp_dir/output_styles.json"
+  echo "$auto_memory" > "$_tmp_dir/auto_memory.json"
+  echo "$agent_memory" > "$_tmp_dir/agent_memory.json"
+  echo "${settings:-null}" > "$_tmp_dir/settings.json"
+  echo "${keybindings:-null}" > "$_tmp_dir/keybindings.json"
+  echo "$mcp_servers" > "$_tmp_dir/mcp_servers.json"
+  echo "$shared_skills" > "$_tmp_dir/shared_skills.json"
+  echo "$shared_agents" > "$_tmp_dir/shared_agents.json"
+  echo "$shared_rules" > "$_tmp_dir/shared_rules.json"
+
     jq -n \
       --arg schema_ver "1.0.0" \
       --arg ts "$timestamp" \
       --arg mid "$machine_id" \
       --arg mn "$machine_name" \
       --arg os "$os_type" \
-      --argjson claude_md "${claude_md:-null}" \
-      --argjson rules "$rules" \
-      --argjson skills "$skills" \
-      --argjson agents "$agents" \
-      --argjson output_styles "$output_styles" \
-      --argjson auto_memory "$auto_memory" \
-      --argjson agent_memory "$agent_memory" \
-      --argjson settings "${settings:-null}" \
       --arg settings_hash "${settings_hash}" \
-      --argjson keybindings "${keybindings:-null}" \
       --arg keybindings_hash "${keybindings_hash}" \
-      --argjson mcp_servers "$mcp_servers" \
-      --argjson shared_skills "$shared_skills" \
-      --argjson shared_agents "$shared_agents" \
-      --argjson shared_rules "$shared_rules" \
+      --slurpfile claude_md "$_tmp_dir/claude_md.json" \
+      --slurpfile rules "$_tmp_dir/rules.json" \
+      --slurpfile skills "$_tmp_dir/skills.json" \
+      --slurpfile agents "$_tmp_dir/agents.json" \
+      --slurpfile output_styles "$_tmp_dir/output_styles.json" \
+      --slurpfile auto_memory "$_tmp_dir/auto_memory.json" \
+      --slurpfile agent_memory "$_tmp_dir/agent_memory.json" \
+      --slurpfile settings "$_tmp_dir/settings.json" \
+      --slurpfile keybindings "$_tmp_dir/keybindings.json" \
+      --slurpfile mcp_servers "$_tmp_dir/mcp_servers.json" \
+      --slurpfile shared_skills "$_tmp_dir/shared_skills.json" \
+      --slurpfile shared_agents "$_tmp_dir/shared_agents.json" \
+      --slurpfile shared_rules "$_tmp_dir/shared_rules.json" \
       '{
         schema_version: $schema_ver,
         exported_at: $ts,
         machine: { id: $mid, name: $mn, os: $os },
         declarative: {
-          claude_md: $claude_md,
-          rules: $rules
+          claude_md: $claude_md[0],
+          rules: $rules[0]
         },
         procedural: {
-          skills: $skills,
-          agents: $agents,
-          output_styles: $output_styles
+          skills: $skills[0],
+          agents: $agents[0],
+          output_styles: $output_styles[0]
         },
         experiential: {
-          auto_memory: $auto_memory,
-          agent_memory: $agent_memory
+          auto_memory: $auto_memory[0],
+          agent_memory: $agent_memory[0]
         },
         environmental: {
-          settings: { content: $settings, hash: ("sha256:" + $settings_hash) },
-          keybindings: { content: $keybindings, hash: ("sha256:" + $keybindings_hash) },
-          mcp_servers: $mcp_servers
+          settings: { content: $settings[0], hash: ("sha256:" + $settings_hash) },
+          keybindings: { content: $keybindings[0], hash: ("sha256:" + $keybindings_hash) },
+          mcp_servers: $mcp_servers[0]
         },
         shared: {
-          skills: $shared_skills,
-          agents: $shared_agents,
-          rules: $shared_rules
+          skills: $shared_skills[0],
+          agents: $shared_agents[0],
+          rules: $shared_rules[0]
         }
       }'
+
+  rm -rf "$_tmp_dir"
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────────
