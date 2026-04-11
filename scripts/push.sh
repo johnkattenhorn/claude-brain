@@ -43,7 +43,7 @@ if ! $FORCE && ! $DRY_RUN && [ -f "$snapshot_file" ]; then
     # Check if any rules/skills/agents changed since last snapshot
     changed_files=$(find \
       "${CLAUDE_DIR}/rules" "${CLAUDE_DIR}/skills" "${CLAUDE_DIR}/agents" \
-      -newer "$snapshot_file" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+      -newer "$snapshot_file" -name "*.md" 2>/dev/null | wc -l | tr -d ' ' || echo "0")
     if [ "$changed_files" = "0" ]; then
       log_info "No local changes since last export. Skipping."
       exit 0
