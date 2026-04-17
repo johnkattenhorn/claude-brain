@@ -1,11 +1,8 @@
 ---
 name: brain-log
-description: Show brain sync and evolution history. Pass a number to limit entries (e.g. /brain-log 5).
-user-invocable: true
-disable-model-invocation: true
-argument-hint: "[count]"
-allowed-tools: Bash, Read
+description: Show brain sync and evolution history.
 ---
+
 
 Show the user their brain's sync history.
 

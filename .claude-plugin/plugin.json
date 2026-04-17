@@ -10,20 +10,6 @@
   "repository": "https://github.com/johnkattenhorn/claude-brain",
   "license": "MIT",
   "keywords": ["sync", "memory", "brain", "multi-machine", "merge", "productivity", "dotfiles", "cross-device"],
-  "skills": [
-    "./skills/brain-init",
-    "./skills/brain-join",
-    "./skills/brain-sync",
-    "./skills/brain-status",
-    "./skills/brain-evolve",
-    "./skills/brain-conflicts",
-    "./skills/brain-share",
-    "./skills/brain-shared-list",
-    "./skills/brain-log",
-    "./skills/brain-diff",
-    "./skills/brain-doctor",
-    "./skills/brain-profile"
-  ],
   "agents": [
     "./agents/brain-merge.md"
   ]
