@@ -26,6 +26,5 @@
   ],
   "agents": [
     "./agents/brain-merge.md"
-  ],
-  "hooks": "./hooks/hooks.json"
+  ]
 }
