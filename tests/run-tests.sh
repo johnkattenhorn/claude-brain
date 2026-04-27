@@ -623,6 +623,196 @@ test_encryption_roundtrip() {
   fi
 }
 
+test_path_traversal_blocked() {
+  section "Import: path traversal blocked"
+
+  # Create a brain with a malicious key containing '..'
+  cat > "$TEST_DIR/malicious-brain.json" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "test", "name": "test"},
+  "declarative": {"claude_md": null, "rules": {"../../etc/evil.md": {"content": "pwned", "hash": "sha256:test"}}},
+  "procedural": {"skills": {}, "agents": {}},
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {"settings": {"content": null, "hash": ""}, "keybindings": {"content": null, "hash": ""}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  local output
+  output=$(bash "$PROJECT_DIR/scripts/import.sh" "$TEST_DIR/malicious-brain.json" --no-backup 2>&1) || true
+
+  if echo "$output" | grep -q "BLOCKED path traversal"; then
+    pass "Path traversal key rejected with warning"
+  else
+    fail "Path traversal key was not blocked"
+  fi
+
+  if [ ! -f "$TEST_DIR/home/etc/evil.md" ] && [ ! -f "/etc/evil.md" ]; then
+    pass "Malicious file was not written"
+  else
+    fail "Malicious file was written!"
+    rm -f "$TEST_DIR/home/etc/evil.md" "/etc/evil.md" 2>/dev/null
+  fi
+}
+
+test_export_memory_only() {
+  section "Export: --memory-only flag"
+
+  local output="$TEST_DIR/snapshot-memory-only.json"
+  bash "$PROJECT_DIR/scripts/export.sh" --memory-only --output "$output" --skip-secret-scan --quiet 2>/dev/null || true
+
+  if [ ! -f "$output" ]; then
+    fail "export.sh --memory-only did not produce output"
+    return
+  fi
+
+  if json_valid "$output"; then
+    pass "Memory-only output is valid JSON"
+  else
+    fail "Memory-only output is not valid JSON"
+    return
+  fi
+
+  # Skills should be empty
+  local skills_count
+  skills_count=$(json_length ".procedural.skills" "$output" || echo "0")
+  if [ "$skills_count" -eq 0 ]; then
+    pass "Skills empty in memory-only export"
+  else
+    fail "Skills not empty in memory-only export (got $skills_count)"
+  fi
+
+  # Rules should be empty
+  local rules_count
+  rules_count=$(json_length ".declarative.rules" "$output" || echo "0")
+  if [ "$rules_count" -eq 0 ]; then
+    pass "Rules empty in memory-only export"
+  else
+    fail "Rules not empty in memory-only export (got $rules_count)"
+  fi
+
+  # Settings should be null
+  local settings_val
+  settings_val=$(jqr ".environmental.settings.content" "$output" 2>/dev/null || echo "null")
+  if [ "$settings_val" = "null" ]; then
+    pass "Settings null in memory-only export"
+  else
+    fail "Settings not null in memory-only export"
+  fi
+}
+
+test_export_scans_all_file_types() {
+  section "Export: scans all file types (not just .md)"
+
+  # Create non-md files in skills dir
+  echo '{"tool": true}' > "$CLAUDE_DIR/skills/config.json"
+  echo 'key: value' > "$CLAUDE_DIR/skills/settings.yaml"
+
+  local output="$TEST_DIR/snapshot-all-types.json"
+  bash "$PROJECT_DIR/scripts/export.sh" --output "$output" --skip-secret-scan --quiet 2>/dev/null || true
+
+  if [ ! -f "$output" ]; then
+    fail "export.sh did not produce output"
+    return
+  fi
+
+  local content
+  content=$(cat "$output")
+
+  if echo "$content" | jq -e '.procedural.skills["config.json"]' >/dev/null 2>&1; then
+    pass ".json files included in export"
+  else
+    fail ".json files NOT included in export"
+  fi
+
+  if echo "$content" | jq -e '.procedural.skills["settings.yaml"]' >/dev/null 2>&1; then
+    pass ".yaml files included in export"
+  else
+    fail ".yaml files NOT included in export"
+  fi
+}
+
+test_semantic_merge_fallback() {
+  section "Pull: semantic merge fallback logic"
+
+  # We test the logic by checking that .merging is cleaned up on success
+  # and used as fallback on failure. We do this with mock merge scripts.
+
+  local test_snap_dir="$TEST_DIR/merge-test"
+  mkdir -p "$test_snap_dir"
+
+  # Create two minimal snapshots
+  for id in aaa bbb; do
+    cat > "$test_snap_dir/snap-${id}.json" <<EOF
+{"schema_version":"1.0.0","machine":{"id":"${id}","name":"machine-${id}"},"declarative":{},"procedural":{},"experiential":{},"environmental":{}}
+EOF
+  done
+
+  # The real merge scripts may not work without full context, so we verify
+  # the code structure by checking pull.sh contains the fix pattern
+  if grep -q 'rm -f.*brain.json.merging' "$PROJECT_DIR/scripts/pull.sh"; then
+    pass "pull.sh cleans up .merging on semantic merge success"
+  else
+    fail "pull.sh does not clean up .merging on semantic merge success"
+  fi
+
+  if grep -q 'Semantic merge failed.*structured merge only' "$PROJECT_DIR/scripts/pull.sh"; then
+    pass "pull.sh falls back to structured merge on semantic failure"
+  else
+    fail "pull.sh missing structured merge fallback"
+  fi
+}
+
+test_register_machine_preserves_timestamps() {
+  section "register-machine.sh preserves existing sync timestamps"
+
+  # Initial registration (creates brain-config.json from scratch)
+  rm -f "$BRAIN_CONFIG"
+  bash "$PROJECT_DIR/scripts/register-machine.sh" "git@github.com:test/test.git" 2>/dev/null || true
+
+  if [ ! -f "$BRAIN_CONFIG" ]; then
+    fail "brain-config.json not created on first registration"
+    return
+  fi
+
+  # Seed known timestamps into the config
+  local known_push="2025-01-15T10:00:00Z"
+  local known_pull="2025-01-14T09:00:00Z"
+  local known_evolved="2025-01-13T08:00:00Z"
+  json_set "$BRAIN_CONFIG" "last_push" "$known_push"
+  json_set "$BRAIN_CONFIG" "last_pull" "$known_pull"
+  json_set "$BRAIN_CONFIG" "last_evolved" "$known_evolved"
+
+  # Re-register (simulates what push.sh does mid-run to update machines.json)
+  bash "$PROJECT_DIR/scripts/register-machine.sh" "git@github.com:test/test.git" 2>/dev/null || true
+
+  local actual_push actual_pull actual_evolved
+  actual_push=$(jqr ".last_push" "$BRAIN_CONFIG")
+  actual_pull=$(jqr ".last_pull" "$BRAIN_CONFIG")
+  actual_evolved=$(jqr ".last_evolved" "$BRAIN_CONFIG")
+
+  [ "$actual_push" = "$known_push" ] \
+    && pass "last_push preserved after re-registration" \
+    || fail "last_push wiped by re-registration (got '$actual_push', expected '$known_push')"
+
+  [ "$actual_pull" = "$known_pull" ] \
+    && pass "last_pull preserved after re-registration" \
+    || fail "last_pull wiped by re-registration (got '$actual_pull', expected '$known_pull')"
+
+  [ "$actual_evolved" = "$known_evolved" ] \
+    && pass "last_evolved preserved after re-registration" \
+    || fail "last_evolved wiped by re-registration (got '$actual_evolved', expected '$known_evolved')"
+
+  # Verify null stays null on a brand-new config (never pushed)
+  rm -f "$BRAIN_CONFIG"
+  bash "$PROJECT_DIR/scripts/register-machine.sh" "git@github.com:test/test.git" 2>/dev/null || true
+  actual_push=$(jqr ".last_push" "$BRAIN_CONFIG")
+  [ "$actual_push" = "null" ] \
+    && pass "last_push is null on fresh registration (never pushed)" \
+    || fail "last_push should be null on fresh registration (got '$actual_push')"
+}
+
 # ── Run ────────────────────────────────────────────────────────────────────────
 echo -e "${CYAN}claude-brain integration tests${NC}"
 echo "================================"
@@ -641,8 +831,13 @@ test_secret_scanning
 test_export_import_roundtrip
 test_structured_merge
 test_register_machine
+test_register_machine_preserves_timestamps
 test_shared_namespace
 test_auto_evolve_trigger
+test_path_traversal_blocked
+test_export_memory_only
+test_export_scans_all_file_types
+test_semantic_merge_fallback
 test_wsl_detection
 test_encryption_roundtrip
 

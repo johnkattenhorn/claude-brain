@@ -62,14 +62,20 @@ import_dir_entries() {
     return 0
   fi
 
-  # Resolve base_dir to absolute path for traversal check
+  # Resolve base_dir to absolute path for traversal check (pipe through stdin to avoid injection)
   local resolved_base
-  resolved_base=$(python3 -c "import os; print(os.path.realpath('$base_dir'))" 2>/dev/null || realpath "$base_dir" 2>/dev/null || echo "$base_dir")
+  resolved_base=$(echo "$base_dir" | python3 -c "import os,sys; print(os.path.realpath(sys.stdin.read().strip()))" 2>/dev/null || realpath "$base_dir" 2>/dev/null || echo "$base_dir")
 
     echo "$json_entries" | jq -r 'keys[]' | while read -r key; do
+      # Pure-bash path traversal guard: reject keys containing '..' components
+      if echo "$key" | grep -qE '(^|/)\.\.(/|$)'; then
+        log_warn "BLOCKED path traversal: $key"
+        continue
+      fi
+
       # PATH TRAVERSAL CHECK: ensure key doesn't escape base_dir
       local resolved_target
-      resolved_target=$(python3 -c "import os; print(os.path.realpath('${resolved_base}/${key}'))" 2>/dev/null || realpath "${resolved_base}/${key}" 2>/dev/null || echo "${resolved_base}/${key}")
+      resolved_target=$(echo "$resolved_base/$key" | python3 -c "import os,sys; print(os.path.realpath(sys.stdin.read().strip()))" 2>/dev/null || realpath "${resolved_base}/${key}" 2>/dev/null || echo "${resolved_base}/${key}")
       if [[ "$resolved_target" != "${resolved_base}/"* ]]; then
         log_warn "BLOCKED path traversal attempt: ${key} (would write outside ${base_dir})"
         continue
@@ -232,28 +238,60 @@ import_brain() {
     done
   fi
 
-  # Environmental: settings (deep merge, preserve local env AND local mcpServers)
+  # Environmental: settings (deep merge, preserve local env)
+  # Note: mcpServers are NOT in settings.json — they live in ~/.claude.json (CLAUDE_JSON)
   if should_sync "settings"; then
     local new_settings
     new_settings=$(echo "$brain" | jq '.environmental.settings.content // null')
     if [ "$new_settings" != "null" ] && [ -f "${CLAUDE_DIR}/settings.json" ]; then
-      local tmp
+      local tmp tmp_remote
       tmp=$(brain_mktemp)
-      # Merge: remote provides new keys, local always wins for existing keys
-      # env and mcpServers are always preserved from local (machine-specific)
+      tmp_remote=$(brain_mktemp)
+      printf '%s\n' "$new_settings" > "$tmp_remote"
+      # Merge: keep local env, merge everything else from consolidated
+      # Note: mcpServers are NOT in settings.json — they live in ~/.claude.json (CLAUDE_JSON)
       jq -s '.[0] as $local | .[1] as $remote |
         ($local.env // {}) as $local_env |
-        ($local.mcpServers // {}) as $local_mcp |
-        (($remote // {}) | del(.env) | del(.mcpServers)) as $remote_clean |
-        ($remote_clean * $local) | .env = $local_env | .mcpServers = $local_mcp' \
-        "${CLAUDE_DIR}/settings.json" <(echo "$new_settings") > "$tmp"
+        ($remote // {}) * $local | .env = $local_env' \
+        "${CLAUDE_DIR}/settings.json" "$tmp_remote" > "$tmp"
       mv "$tmp" "${CLAUDE_DIR}/settings.json"
       chmod 600 "${CLAUDE_DIR}/settings.json"
-      log_info "Updated: settings.json (merged, local env and mcpServers preserved)"
+      log_info "Updated: settings.json (merged, local env preserved)"
     elif [ "$new_settings" != "null" ] && [ ! -f "${CLAUDE_DIR}/settings.json" ]; then
       echo "$new_settings" > "${CLAUDE_DIR}/settings.json"
       chmod 600 "${CLAUDE_DIR}/settings.json"
       log_info "Created: settings.json"
+    fi
+
+  # Environmental: MCP servers (merge into ~/.claude.json, preserve local env)
+  # Claude Code stores mcpServers in ~/.claude.json (CLAUDE_JSON), not settings.json.
+  # Expand ${HOME} placeholders back to actual paths before writing.
+    local new_mcp_servers
+    new_mcp_servers=$(echo "$brain" | jq '.environmental.mcp_servers // {}')
+    if [ "$new_mcp_servers" != "{}" ] && [ "$new_mcp_servers" != "null" ]; then
+      # Expand ${HOME} placeholders to actual HOME path
+      new_mcp_servers=$(echo "$new_mcp_servers" | sed "s|\\\${HOME}|${HOME}|g")
+      if [ -f "${CLAUDE_JSON}" ]; then
+        local tmp
+        tmp=$(brain_mktemp)
+        # Merge: combine remote MCP servers with local ones (local takes precedence),
+        # preserve all other fields in ~/.claude.json including local env vars
+        local tmp_mcp
+        tmp_mcp=$(brain_mktemp)
+        printf '%s\n' "$new_mcp_servers" > "$tmp_mcp"
+        jq -s '.[0] as $local | .[1] as $remote_mcp |
+          ($local.mcpServers // {}) as $local_mcp |
+          $local | .mcpServers = ($remote_mcp * $local_mcp)' \
+          "${CLAUDE_JSON}" "$tmp_mcp" > "$tmp"
+        mv "$tmp" "${CLAUDE_JSON}"
+        chmod 600 "${CLAUDE_JSON}"
+        log_info "Updated: ~/.claude.json (MCP servers merged, local overrides preserved)"
+      else
+        # Create ~/.claude.json with just mcpServers
+        jq -n --argjson mcp "$new_mcp_servers" '{"mcpServers": $mcp}' > "${CLAUDE_JSON}"
+        chmod 600 "${CLAUDE_JSON}"
+        log_info "Created: ~/.claude.json with MCP servers"
+      fi
     fi
 
   # Environmental: keybindings (union)
@@ -261,14 +299,16 @@ import_brain() {
     new_keybindings=$(echo "$brain" | jq '.environmental.keybindings.content // null')
     if [ "$new_keybindings" != "null" ]; then
       if [ -f "${CLAUDE_DIR}/keybindings.json" ]; then
-        local tmp
+        local tmp tmp_remote_kb
         tmp=$(brain_mktemp)
+        tmp_remote_kb=$(brain_mktemp)
+        printf '%s\n' "$new_keybindings" > "$tmp_remote_kb"
         # Union keybindings (deduplicate by key+command)
         # Handle both formats: bare array [...] and object { "bindings": [...] }
         jq -s '
           def to_arr: if type == "array" then . elif type == "object" and has("bindings") then .bindings else [] end;
           { "bindings": ((.[0] | to_arr) + (.[1] | to_arr) | unique_by({key, command})) }
-        ' "${CLAUDE_DIR}/keybindings.json" <(echo "$new_keybindings") > "$tmp"
+        ' "${CLAUDE_DIR}/keybindings.json" "$tmp_remote_kb" > "$tmp"
         mv "$tmp" "${CLAUDE_DIR}/keybindings.json"
         log_info "Updated: keybindings.json (merged)"
       else

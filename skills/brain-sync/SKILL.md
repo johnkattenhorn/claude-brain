@@ -1,11 +1,8 @@
 ---
 name: brain-sync
-description: Manually sync brain with remote. Exports local state, pushes to remote, pulls updates from other machines, merges, and applies. Use --dry-run to preview.
-user-invocable: true
-disable-model-invocation: true
-argument-hint: "[--dry-run]"
-allowed-tools: Bash, Read, Write, Edit
+description: Manually sync brain with remote. Exports local state, pushes to remote, pulls updates from other machines, merges, and applies.
 ---
+
 
 The user wants to manually trigger a full brain sync cycle.
 

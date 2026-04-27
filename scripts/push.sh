@@ -81,7 +81,7 @@ fi
 # Update machines.json with last sync time
 "${SCRIPT_DIR}/register-machine.sh" "$(get_config remote)"
 
-# Commit and push
+# Commit and push (add paths separately so missing shared/ doesn't block others)
 brain_git add "machines/${machine_id}/" "meta/machines.json" 2>/dev/null || true
 brain_git add "shared/" 2>/dev/null || true
 brain_git add "PLUGINS.md" 2>/dev/null || true
